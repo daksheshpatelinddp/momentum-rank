@@ -1,196 +1,187 @@
-#!/usr/bin/env python3
-"""Rank the stocks in symbols.txt by momentum, using split/bonus-adjusted NSE closes.
+"""Rank the stocks in symbols.txt by momentum, using split/bonus-adjusted NSE prices.
 
-Adjustment method: every bhavcopy row has today's close AND the previous close as NSE
-sees it. On the ex-date of a split/bonus, NSE lowers the previous close, so
-    factor = today's prev_close / yesterday's stored close
-differs from 1. Every earlier price is multiplied by that factor.
+Reads  : symbols.txt, data/prices.csv
+Writes : output/ranked.csv, output/ranked.md (and the GitHub run summary)
 """
+import datetime as dt
 import os
 import re
 import sys
-from datetime import datetime
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 
-DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
-SYMBOLS_FILE = Path(os.environ.get("SYMBOLS_FILE", "symbols.txt"))
-OUT_CSV = Path(os.environ.get("OUT_CSV", "ranked.csv"))
-OUT_MD = Path(os.environ.get("OUT_MD", "ranked.md"))
+from adjust import adjusted_close
 
-EVENT_THRESHOLD = 0.03       # |factor-1| above this counts as a corporate action
-GAP_EVENT_THRESHOLD = 0.25   # stricter threshold on days after a missing market-wide day
-GAP_SHARE = 0.30             # share of stocks that "mismatch" that reveals a missing day
-MIN_ROWS = 253               # trading days needed for the 12-1 month measure
-WEIGHTS = {"ret_6m_per_vol": 0.30, "ret_12_1": 0.25, "ret_3m": 0.25, "near_high": 0.20}
+STORE = "data/prices.csv"
+OUT_CSV = "output/ranked.csv"
+OUT_MD = "output/ranked.md"
+MIN_ROWS = 253                 # trading days needed for the 12-1 return
+JUMP_FLAG = 0.35               # a 1-day move above 35 % after adjustment -> "check chart"
+
+# Score = weighted average of percentile ranks (0 = worst, 1 = best) among your list.
+WEIGHTS = {
+    "r6_per_vol": 0.30,        # 6-month return divided by volatility
+    "r12_1":      0.25,        # 12-month return skipping the latest month
+    "r3":         0.25,        # 3-month return
+    "near_high":  0.20,        # closeness to the 52-week high
+}
 
 
-def read_symbols(path):
-    if not path.exists():
-        sys.exit(f"ERROR: {path} not found.")
+def read_symbols(path="symbols.txt"):
+    if not os.path.exists(path):
+        raise SystemExit("symbols.txt not found. Create it with one NSE symbol per line.")
     out = []
-    for line in path.read_text(encoding="utf-8-sig").splitlines():
-        line = line.split("#")[0].strip()
-        for tok in re.split(r"[,\s;]+", line):
-            tok = tok.strip().upper()
-            if tok.startswith("NSE:"):
-                tok = tok[4:]
-            if tok.endswith(".NS"):
-                tok = tok[:-3]
-            if tok and tok not in ("SYMBOL", "SYMBOLS") and tok not in out:
-                out.append(tok)
+    with open(path, encoding="utf-8-sig") as f:
+        for line in f:
+            line = line.split("#")[0]
+            for tok in re.split(r"[,\s;]+", line):
+                tok = tok.strip().upper()
+                if tok.startswith("NSE:"):
+                    tok = tok[4:]
+                if tok.endswith(".NS"):
+                    tok = tok[:-3]
+                if tok and tok not in out:
+                    out.append(tok)
+    if not out:
+        raise SystemExit("symbols.txt is empty. Paste your Chartink symbols, one per line.")
     return out
 
 
-def load_prices():
-    files = sorted(DATA_DIR.glob("*.csv.gz"))
-    frames = []
-    for f in files:
-        try:
-            date = pd.Timestamp(f.name[:10])
-        except ValueError:
-            continue
-        df = pd.read_csv(f, usecols=["symbol", "close", "prev_close"])
-        df["date"] = date
-        frames.append(df)
-    if not frames:
-        sys.exit("ERROR: no price files in data/. Run fetch_bhav.py first.")
-    data = pd.concat(frames, ignore_index=True).drop_duplicates(["date", "symbol"], keep="last")
-    close = data.pivot(index="date", columns="symbol", values="close").sort_index()
-    prev = data.pivot(index="date", columns="symbol", values="prev_close").reindex(close.index)
-    return close, prev
-
-
-def adjust_prices(close, prev):
-    """Return (adjusted close, table of detected events, dates that follow a missing day)."""
-    factor = prev / close.shift(1)
-    mismatch = (factor - 1).abs()
-    n_valid = mismatch.notna().sum(axis=1)
-    share = (mismatch > 0.005).sum(axis=1) / n_valid.where(n_valid >= 50)
-    gap_dates = share[share > GAP_SHARE].index
-
-    threshold = pd.Series(EVENT_THRESHOLD, index=close.index)
-    threshold[gap_dates] = GAP_EVENT_THRESHOLD
-    is_event = mismatch.gt(threshold, axis=0)
-    multiplier = factor.where(is_event, 1.0)
-    # price on day t is scaled by every event that happens AFTER t
-    after = multiplier.iloc[::-1].cumprod().iloc[::-1].shift(-1).fillna(1.0)
-    return close * after, factor.where(is_event), gap_dates
-
-
 def md_table(df):
-    cols = list(df.columns)
+    cols = [str(c) for c in df.columns]
     lines = ["| " + " | ".join(cols) + " |", "|" + "|".join("---" for _ in cols) + "|"]
-    for _, row in df.iterrows():
-        lines.append("| " + " | ".join(str(row[c]) for c in cols) + " |")
+    for row in df.itertuples(index=False):
+        lines.append("| " + " | ".join(str(v) for v in row) + " |")
     return "\n".join(lines)
 
 
-def main():
-    symbols = read_symbols(SYMBOLS_FILE)
-    if not symbols:
-        sys.exit("ERROR: symbols.txt is empty. Paste your Chartink symbols, one per line.")
-
-    close, prev = load_prices()
-    if len(close) < MIN_ROWS:
-        sys.exit(f"ERROR: only {len(close)} trading days stored, need {MIN_ROWS}. "
-                 "Run the download step again (the first backfill may have been interrupted).")
-    adj, events, gap_dates = adjust_prices(close, prev)
-
-    last_date = close.index[-1]
-    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
-    notes = []
-    if (today - last_date.date()).days > 7:
-        notes.append(f"WARNING: newest data is {last_date.date()}, more than 7 days old.")
-    if len(gap_dates):
-        notes.append("Days after a missing market-wide day (extra-strict event rule used): "
-                     + ", ".join(d.strftime("%Y-%m-%d") for d in gap_dates))
-
-    px = adj.ffill(limit=5)
-    last = px.iloc[-1]
-    daily_ret = px / px.shift(1) - 1
-    metrics = pd.DataFrame({
-        "close": close.iloc[-1],
-        "ret_3m": last / px.iloc[-64] - 1,
-        "ret_6m": last / px.iloc[-127] - 1,
-        "ret_12_1": px.iloc[-22] / px.iloc[-253] - 1,
-        "ann_vol": daily_ret.iloc[-126:].std() * np.sqrt(252),
-        "near_high": last / px.iloc[-252:].max(),
-    })
-    metrics["ret_6m_per_vol"] = metrics["ret_6m"] / metrics["ann_vol"]
-    metrics = metrics.replace([np.inf, -np.inf], np.nan)
-
-    found = [s for s in symbols if s in metrics.index]
-    not_found = [s for s in symbols if s not in metrics.index]
-    traded = close.iloc[-1].notna()
-    inactive = [s for s in found if not traded[s]]
-    m = metrics.loc[[s for s in found if traded[s]]]
-    ok = m[list(WEIGHTS) + ["close"]].notna().all(axis=1) & (m["ann_vol"] > 0)
-    short_history = list(m.index[~ok])
-    m = m[ok].copy()
-    if m.empty:
-        sys.exit("ERROR: none of your symbols could be ranked. "
-                 f"Not found: {not_found[:20]} | short history: {short_history[:20]}")
-
-    pct = m[list(WEIGHTS)].rank(pct=True)
-    m["score"] = sum(w * pct[c] for c, w in WEIGHTS.items()) * 100
-    m = m.sort_values("score", ascending=False)
-    m["adj_events"] = events.notna().sum().reindex(m.index).fillna(0).astype(int)
-
-    out = pd.DataFrame({
-        "score": m["score"].round(1),
-        "close": m["close"].round(2),
-        "ret_3m_%": (m["ret_3m"] * 100).round(1),
-        "ret_6m_%": (m["ret_6m"] * 100).round(1),
-        "ret_12_1_%": (m["ret_12_1"] * 100).round(1),
-        "ann_vol_%": (m["ann_vol"] * 100).round(1),
-        "below_52w_high_%": ((m["near_high"] - 1) * 100).round(1),
-        "adj_events": m["adj_events"],
-    })
-    out.insert(0, "symbol", out.index)
-    out.insert(0, "rank", np.arange(1, len(out) + 1))
-    out = out.reset_index(drop=True)
-    out.to_csv(OUT_CSV, index=False)
-
-    ev_lines = []
-    for sym in m.index[m["adj_events"] > 0]:
-        for d, f in events[sym].dropna().items():
-            ev_lines.append(f"- {sym}: {d.date()} factor {f:.4f} (earlier prices multiplied by this)")
-
-    md = [f"# Momentum ranking - data up to {last_date.date()}", "",
-          f"Symbols in list: {len(symbols)} | ranked: {len(out)}", ""]
-    md.append(md_table(out))
-    md.append("")
-    if ev_lines:
-        md += ["## Corporate actions detected (check against a chart)"] + ev_lines + [""]
-    for label, items in (("Not found in NSE data", not_found),
-                         ("Did not trade on the latest date", inactive),
-                         ("Not enough price history", short_history)):
-        if items:
-            md += [f"**{label}:** {', '.join(items)}", ""]
-    if notes:
-        md += notes + [""]
-    md.append("_Ranking is a research shortlist, not investment advice._")
-    text = "\n".join(md)
-    OUT_MD.write_text(text + "\n", encoding="utf-8")
-
+def write_reports(md_text, ranked_df):
+    os.makedirs("output", exist_ok=True)
+    ranked_df.to_csv(OUT_CSV, index=False)
+    with open(OUT_MD, "w", encoding="utf-8") as f:
+        f.write(md_text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
-        with open(summary, "a", encoding="utf-8") as fh:
-            fh.write(text + "\n")
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write(md_text)
 
-    print(out.head(25).to_string(index=False))
-    print(f"\nRanked {len(out)} of {len(symbols)} symbols. Data through {last_date.date()}.")
-    for n in notes:
-        print(n)
+
+def main():
+    symbols = read_symbols()
+    if not os.path.exists(STORE):
+        raise SystemExit(f"{STORE} not found. fetch_bhav.py must run first.")
+    store = pd.read_csv(STORE, parse_dates=["date"])
+    if store.empty:
+        raise SystemExit(f"{STORE} is empty.")
+
+    today = dt.datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    as_of = store["date"].max()
+    all_dates = sorted(store["date"].unique())
+    notes = []
+
+    age = (today - as_of.date()).days
+    if age > 6:
+        notes.append(f"WARNING: latest price data is {age} days old ({as_of.date()}).")
+
+    px, events, gap_dates = adjusted_close(store, symbols)
+    if gap_dates:
+        notes.append("WARNING: these dates look like they follow a missing trading day, so "
+                     "corporate actions on them were ignored: "
+                     + ", ".join(d.strftime("%Y-%m-%d") for d in gap_dates[-10:]))
+
+    px = px.reindex(all_dates)                 # one row per market day, same for every stock
+    if len(px) < MIN_ROWS:
+        raise SystemExit(f"Only {len(px)} trading days of history; need {MIN_ROWS}. "
+                         "Run the workflow with 'rebuild' ticked.")
+    px = px.ffill(limit=3)
+
+    not_found = [s for s in symbols if s not in px.columns]
+    have = [s for s in symbols if s in px.columns]
+    px = px[have]
+
+    pts = px.iloc[[-1, -22, -64, -127, -253]]
+    good = pts.notna().all()
+    short = [s for s in have if not good[s]]
+    px = px.loc[:, good[good].index]
+
+    if px.shape[1] == 0:
+        md = ("# Momentum ranking\n\nNo stock in symbols.txt had enough price history.\n\n"
+              f"Not found in NSE data: {', '.join(not_found) or 'none'}\n\n"
+              f"Too little history or not trading recently: {', '.join(short) or 'none'}\n")
+        write_reports(md, pd.DataFrame(columns=["rank", "symbol", "score"]))
+        print(md)
+        return 1
+
+    last = px.iloc[-1]
+    daily = px / px.shift(1) - 1
+    vol = daily.iloc[-126:].std() * np.sqrt(252)
+    vol = vol.where(vol > 0)
+    r3 = last / px.iloc[-64] - 1
+    r6 = last / px.iloc[-127] - 1
+    r12_1 = px.iloc[-22] / px.iloc[-253] - 1
+    hi52 = px.iloc[-252:].max()
+    near_high = last / hi52
+    max_jump = daily.iloc[-252:].abs().max()
+
+    m = pd.DataFrame({"r3": r3, "r6": r6, "r12_1": r12_1, "r6_per_vol": r6 / vol,
+                      "near_high": near_high, "vol": vol, "close": last,
+                      "max_jump": max_jump})
+    bad = m.index[m[list(WEIGHTS)].isna().any(axis=1)].tolist()
+    m = m.drop(index=bad)
+
+    pct = m[list(WEIGHTS)].rank(pct=True)
+    m["score"] = sum(w * pct[k] for k, w in WEIGHTS.items())
+    m = m.sort_values("score", ascending=False)
+
+    ranked = pd.DataFrame({
+        "rank": range(1, len(m) + 1),
+        "symbol": m.index,
+        "score": (m["score"] * 100).round(1).to_numpy(),
+        "ret_3m_%": (m["r3"] * 100).round(1).to_numpy(),
+        "ret_6m_%": (m["r6"] * 100).round(1).to_numpy(),
+        "ret_12m_ex1m_%": (m["r12_1"] * 100).round(1).to_numpy(),
+        "volatility_%": (m["vol"] * 100).round(1).to_numpy(),
+        "below_52w_high_%": ((1 - m["near_high"]) * 100).round(1).to_numpy(),
+        "close": m["close"].round(2).to_numpy(),
+        "flag": np.where(m["max_jump"].to_numpy() > JUMP_FLAG, "check chart", ""),
+    })
+
+    ev = events[events["symbol"].isin(ranked["symbol"])].copy()
+    ev = ev[ev["date"] >= pd.Timestamp(all_dates[-253])]
+
+    md = [f"# Momentum ranking (data up to {as_of.date()})\n",
+          f"Ranked **{len(ranked)}** of {len(symbols)} symbols. "
+          "Score is 0-100 (percentile-based, relative to this list only).\n"]
+    if notes:
+        md.append("\n".join(f"- {n}" for n in notes) + "\n")
+    md.append(md_table(ranked) + "\n")
+    if len(ev):
+        evt = pd.DataFrame({
+            "date": ev["date"].dt.strftime("%Y-%m-%d"),
+            "symbol": ev["symbol"],
+            "adjustment factor": ev["factor"].round(4),
+            "meaning": np.where(ev["factor"] < 1, "split/bonus (older prices scaled down)",
+                                "reverse split (older prices scaled up)"),
+        })
+        md.append("\n## Corporate actions detected and adjusted\n\n" + md_table(evt) + "\n")
     if not_found:
-        print("Not found:", ", ".join(not_found))
-    if short_history:
-        print("Not enough history:", ", ".join(short_history))
+        md.append("\n**Not found in NSE data** (typo, renamed, SME or not listed): "
+                  + ", ".join(not_found) + "\n")
+    if short:
+        md.append("\n**Skipped: less than about 12 months of history or not trading "
+                  "recently:** " + ", ".join(short) + "\n")
+    if bad:
+        md.append("\n**Skipped: metrics could not be computed:** " + ", ".join(bad) + "\n")
+    md.append("\n*Research shortlist only, not investment advice. "
+              "'check chart' = a 1-day move above 35% remains after adjustment; verify it.*\n")
+
+    text = "\n".join(md)
+    write_reports(text, ranked)
+    print(text)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
