@@ -4,11 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       rebuild:
-        description: "Delete all stored prices and download everything again (repair only)"
+        description: "Rebuild all price history from scratch (slow, about 15 min)"
         type: boolean
         default: false
+  push:
+    branches: [main]
+    paths: [symbols.txt]
   schedule:
-    - cron: "30 11 * * 6"     # every Saturday 5:00 PM IST (11:30 UTC)
+    - cron: "30 4 * * 6"
 
 permissions:
   contents: write
@@ -20,7 +23,7 @@ concurrency:
 jobs:
   rank:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -32,48 +35,27 @@ jobs:
       - name: Install packages
         run: pip install -r requirements.txt
 
-      - name: Rebuild (only if requested)
-        if: ${{ inputs.rebuild }}
-        run: rm -rf data
+      - name: Self-test (offline)
+        run: python selftest.py
 
       - name: Download NSE bhavcopy
+        env:
+          REBUILD: ${{ inputs.rebuild || 'false' }}
         run: python fetch_bhav.py
 
       - name: Rank stocks
         run: python rank.py
 
-      - name: Save data and results
+      - name: Save results to the repo
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
-            echo "Nothing new to commit"
+            echo "Nothing to commit"
           else
-            git commit -m "Update data and ranking"
-            git pull --rebase
-            git push
-          fi
-        if: ${{ inputs.rebuild }}
-        run: rm -rf data
-
-      - name: Download NSE bhavcopy
-        run: python fetch_bhav.py
-
-      - name: Rank stocks
-        run: python rank.py
-
-      - name: Save data and results
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "Nothing new to commit"
-          else
-            git commit -m "Update data and ranking"
-            git pull --rebase
+            git commit -m "Update prices and ranking"
+            git pull --rebase --autostash
             git push
           fi
