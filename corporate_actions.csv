@@ -1,0 +1,9 @@
+# Your own list of bonus / split events. These are always trusted and always used.
+# factor = the price multiplier for all earlier prices:
+#   1:1 bonus or 1:2 split -> 0.5     1:3 bonus -> 0.75     1:2 bonus -> 0.6667
+#   2:1 bonus -> 0.3333               5:1 split -> 0.2      10:1 reverse split -> 10
+# ex_date = first trading day the price is lower. Keep notes free of commas.
+symbol,ex_date,factor,note
+HDFCBANK,2025-08-26,0.5,1:1 bonus
+BRIGADE,2026-06-17,0.75,1:3 bonus
+GOLDIAM,2026-07-10,0.75,1:3 bonus

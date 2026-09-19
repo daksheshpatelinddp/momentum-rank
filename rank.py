@@ -1,6 +1,6 @@
-"""Rank the stocks in symbols.txt by momentum, using split/bonus-adjusted NSE prices.
+"""Rank the stocks in symbols.txt by momentum, using bonus/split-adjusted NSE prices.
 
-Reads  : symbols.txt, data/prices.csv
+Reads  : symbols.txt, corporate_actions.csv, data/prices.csv
 Writes : output/ranked.csv, output/ranked.md (and the GitHub run summary)
 """
 import datetime as dt
@@ -12,13 +12,16 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from adjust import adjusted_close
+from adjust import raw_close_matrix, apply_events
+from events import load_manual, fetch_yahoo, build_events
 
 STORE = "data/prices.csv"
 OUT_CSV = "output/ranked.csv"
 OUT_MD = "output/ranked.md"
-MIN_ROWS = 253                 # trading days needed for the 12-1 return
-JUMP_FLAG = 0.35               # a 1-day move above 35 % after adjustment -> "check chart"
+# Look-backs are calendar days, like Screener / Chartink: 3m = 90, 6m = 180, 1y = 365 days.
+LOOKBACKS = {"m1": 30, "m3": 90, "m6": 180, "y1": 365}
+DROP_FLAG = -0.15              # a 1-day fall bigger than this after adjustment -> "check chart"
+JUMP_FLAG = 0.35               # a 1-day rise bigger than this after adjustment -> "check chart"
 
 # Score = weighted average of percentile ranks (0 = worst, 1 = best) among your list.
 WEIGHTS = {
@@ -68,7 +71,7 @@ def write_reports(md_text, ranked_df):
             f.write(md_text)
 
 
-def main():
+def main(get_splits=None):
     symbols = read_symbols()
     if not os.path.exists(STORE):
         raise SystemExit(f"{STORE} not found. fetch_bhav.py must run first.")
@@ -85,26 +88,48 @@ def main():
     if age > 6:
         notes.append(f"WARNING: latest price data is {age} days old ({as_of.date()}).")
 
-    px, events, gap_dates = adjusted_close(store, symbols)
-    if gap_dates:
-        notes.append("WARNING: these dates look like they follow a missing trading day, so "
-                     "corporate actions on them were ignored: "
-                     + ", ".join(d.strftime("%Y-%m-%d") for d in gap_dates[-10:]))
+    raw = raw_close_matrix(store, symbols)
+    ref = max(pd.Timestamp(today), as_of)          # reference date for the look-backs
+    d = {k: ref - pd.Timedelta(days=n) for k, n in LOOKBACKS.items()}
+    if pd.Timestamp(all_dates[0]) > d["y1"]:
+        raise SystemExit(f"Price history starts {pd.Timestamp(all_dates[0]).date()}, but 1 year "
+                         f"before {ref.date()} is needed. Run the workflow with 'rebuild' ticked.")
+    raw = raw.reindex(all_dates)               # one row per market day, same for every stock
 
-    px = px.reindex(all_dates)                 # one row per market day, same for every stock
-    if len(px) < MIN_ROWS:
-        raise SystemExit(f"Only {len(px)} trading days of history; need {MIN_ROWS}. "
-                         "Run the workflow with 'rebuild' ticked.")
+    not_found = [s for s in symbols if s not in raw.columns]
+    have = [s for s in symbols if s in raw.columns]
+
+    # ---- corporate actions -------------------------------------------------------------
+    manual = load_manual()
+    if os.environ.get("SKIP_YAHOO", "").strip() == "1":
+        yahoo, y_failed = pd.DataFrame(columns=["symbol", "date", "factor"]), {s: "skipped" for s in have}
+    else:
+        kw = {"get_splits": get_splits} if get_splits else {}
+        yahoo, y_failed = fetch_yahoo(have, since=pd.Timestamp(all_dates[0]), **kw)
+    events, rejected = build_events(raw[have], manual, yahoo)
+    px = apply_events(raw[have], events)
+
+    manual_syms = set(manual["symbol"])
+    unverified = [s for s in have if s in y_failed and s not in manual_syms]
+    if y_failed and len(y_failed) == len(have):
+        notes.append("WARNING: Yahoo Finance could not be reached, so bonuses/splits are applied "
+                     "only from corporate_actions.csv. Stocks with a recent bonus or split that "
+                     "is not in that file will have wrong returns.")
+    elif unverified:
+        notes.append("WARNING: corporate actions could not be checked for: "
+                     + ", ".join(unverified))
+
     px = px.ffill(limit=3)
 
-    not_found = [s for s in symbols if s not in px.columns]
-    have = [s for s in symbols if s in px.columns]
-    px = px[have]
+    def at(date):
+        """Last close on or before `date` (NaN if the stock was not trading then)."""
+        return px.loc[:date].iloc[-1]
 
-    pts = px.iloc[[-1, -22, -64, -127, -253]]
-    good = pts.notna().all()
-    short = [s for s in have if not good[s]]
+    p_now, p1m, p3m, p6m, p1y = px.iloc[-1], at(d["m1"]), at(d["m3"]), at(d["m6"]), at(d["y1"])
+    good = pd.concat([p_now, p1m, p3m, p6m, p1y], axis=1).notna().all(axis=1)
+    short = [s for s in have if not good.get(s, False)]
     px = px.loc[:, good[good].index]
+    p_now, p1m, p3m, p6m, p1y = (x[px.columns] for x in (p_now, p1m, p3m, p6m, p1y))
 
     if px.shape[1] == 0:
         md = ("# Momentum ranking\n\nNo stock in symbols.txt had enough price history.\n\n"
@@ -114,20 +139,21 @@ def main():
         print(md)
         return 1
 
-    last = px.iloc[-1]
     daily = px / px.shift(1) - 1
-    vol = daily.iloc[-126:].std() * np.sqrt(252)
+    vol = daily.loc[d["m6"]:].std() * np.sqrt(252)
     vol = vol.where(vol > 0)
-    r3 = last / px.iloc[-64] - 1
-    r6 = last / px.iloc[-127] - 1
-    r12_1 = px.iloc[-22] / px.iloc[-253] - 1
-    hi52 = px.iloc[-252:].max()
-    near_high = last / hi52
-    max_jump = daily.iloc[-252:].abs().max()
+    r3 = p_now / p3m - 1
+    r6 = p_now / p6m - 1
+    r12_1 = p1m / p1y - 1
+    r1y = p_now / p1y - 1
+    near_high = p_now / px.loc[d["y1"]:].max()
+    worst_day = daily.loc[d["y1"]:].min()
+    best_day = daily.loc[d["y1"]:].max()
+    last = p_now
 
-    m = pd.DataFrame({"r3": r3, "r6": r6, "r12_1": r12_1, "r6_per_vol": r6 / vol,
-                      "near_high": near_high, "vol": vol, "close": last,
-                      "max_jump": max_jump})
+    m = pd.DataFrame({"r3": r3, "r6": r6, "r12_1": r12_1, "r1y": r1y,
+                      "r6_per_vol": r6 / vol, "near_high": near_high, "vol": vol,
+                      "close": last, "worst_day": worst_day, "best_day": best_day})
     bad = m.index[m[list(WEIGHTS)].isna().any(axis=1)].tolist()
     m = m.drop(index=bad)
 
@@ -135,37 +161,53 @@ def main():
     m["score"] = sum(w * pct[k] for k, w in WEIGHTS.items())
     m = m.sort_values("score", ascending=False)
 
+    def flag_for(sym, row):
+        f = []
+        if sym in unverified:
+            f.append("unverified")
+        if row.worst_day <= DROP_FLAG:
+            f.append("big 1-day drop: bonus/split?")
+        if row.best_day >= JUMP_FLAG:
+            f.append("big 1-day jump: check")
+        return "; ".join(f)
+
     ranked = pd.DataFrame({
         "rank": range(1, len(m) + 1),
         "symbol": m.index,
         "score": (m["score"] * 100).round(1).to_numpy(),
         "ret_3m_%": (m["r3"] * 100).round(1).to_numpy(),
         "ret_6m_%": (m["r6"] * 100).round(1).to_numpy(),
+        "ret_1y_%": (m["r1y"] * 100).round(1).to_numpy(),
         "ret_12m_ex1m_%": (m["r12_1"] * 100).round(1).to_numpy(),
         "volatility_%": (m["vol"] * 100).round(1).to_numpy(),
         "below_52w_high_%": ((1 - m["near_high"]) * 100).round(1).to_numpy(),
         "close": m["close"].round(2).to_numpy(),
-        "flag": np.where(m["max_jump"].to_numpy() > JUMP_FLAG, "check chart", ""),
+        "flag": [flag_for(s, r) for s, r in zip(m.index, m.itertuples())],
     })
 
-    ev = events[events["symbol"].isin(ranked["symbol"])].copy()
-    ev = ev[ev["date"] >= pd.Timestamp(all_dates[-253])]
-
+    ev = events[events["symbol"].isin(ranked["symbol"])]
     md = [f"# Momentum ranking (data up to {as_of.date()})\n",
           f"Ranked **{len(ranked)}** of {len(symbols)} symbols. "
           "Score is 0-100 (percentile-based, relative to this list only).\n"]
     if notes:
         md.append("\n".join(f"- {n}" for n in notes) + "\n")
     md.append(md_table(ranked) + "\n")
+
     if len(ev):
         evt = pd.DataFrame({
-            "date": ev["date"].dt.strftime("%Y-%m-%d"),
             "symbol": ev["symbol"],
-            "adjustment factor": ev["factor"].round(4),
-            "meaning": np.where(ev["factor"] < 1, "split/bonus (older prices scaled down)",
-                                "reverse split (older prices scaled up)"),
+            "ex-date": ev["date"].dt.strftime("%Y-%m-%d"),
+            "factor": ev["factor"].round(4),
+            "source": ev["source"],
         })
-        md.append("\n## Corporate actions detected and adjusted\n\n" + md_table(evt) + "\n")
+        md.append("\n## Bonus / split adjustments applied\n\n" + md_table(evt) + "\n")
+    else:
+        md.append("\nNo bonus/split adjustments were needed for these stocks.\n")
+    if rejected:
+        rj = pd.DataFrame([(s, d.strftime("%Y-%m-%d"), round(f, 4)) for s, d, f in rejected],
+                          columns=["symbol", "Yahoo date", "factor"])
+        md.append("\n**Yahoo reported these events but NSE prices do not show the drop, so they "
+                  "were NOT applied (check the chart):**\n\n" + md_table(rj) + "\n")
     if not_found:
         md.append("\n**Not found in NSE data** (typo, renamed, SME or not listed): "
                   + ", ".join(not_found) + "\n")
@@ -174,8 +216,9 @@ def main():
                   "recently:** " + ", ".join(short) + "\n")
     if bad:
         md.append("\n**Skipped: metrics could not be computed:** " + ", ".join(bad) + "\n")
-    md.append("\n*Research shortlist only, not investment advice. "
-              "'check chart' = a 1-day move above 35% remains after adjustment; verify it.*\n")
+    md.append("\n*Research shortlist only, not investment advice. Returns use trading-day "
+              "counts (3m = 63, 6m = 126, 1y = 252 days), so they differ slightly from "
+              "calendar-based figures on other sites. ret_12m_ex1m skips the latest month.*\n")
 
     text = "\n".join(md)
     write_reports(text, ranked)
