@@ -1,0 +1,58 @@
+
+⁵name: Momentum rank
+
+on:
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: "Delete all stored prices and download everything again (repair only)"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "30 11 * * 6"     # every Saturday 5:00 PM IST (11:30 UTC)
+
+permissions:
+  contents: write
+
+concurrency:
+  group: momentum-rank
+  cancel-in-progress: false
+
+jobs:
+  rank:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install packages
+        run: pip install -r requirements.txt
+
+      - name: Rebuild (only if requested)
+        if: ${{ inputs.rebuild }}
+        run: rm -rf data
+
+      - name: Download NSE bhavcopy
+        run: python fetch_bhav.py
+
+      - name: Rank stocks
+        run: python rank.py
+
+      - name: Save data and results
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing new to commit"
+          else
+            git commit -m "Update data and ranking"
+            git pull --rebase
+            git push
+          fi
