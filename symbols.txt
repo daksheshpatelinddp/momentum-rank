@@ -1,0 +1,8 @@
+# Paste your Chartink result symbols here: ONE NSE symbol per line.
+# Lines starting with # are ignored. "NSE:" prefix and ".NS" suffix are accepted.
+# Replace the sample lines below with your own list.
+RELIANCE
+TCS
+INFY
+HDFCBANK
+ICICIBANK
