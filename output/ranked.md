@@ -1,22 +1,30 @@
 # Momentum ranking (data up to 2026-09-18)
 
-Ranked **10** of 11 symbols. Score is 0-100 (percentile-based, relative to this list only).
+Ranked **11** of 11 symbols. Score is 0-100 (percentile-based, relative to this list only).
 
-| rank | symbol | score | ret_3m_% | ret_6m_% | ret_12m_ex1m_% | volatility_% | below_52w_high_% | close | flag |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | PAYTM | 96.5 | 69.7 | 82.5 | 29.4 | 44.4 | 0.0 | 1849.9 |  |
-| 2 | PFOCUS | 87.5 | 48.6 | 32.1 | 47.7 | 53.4 | 1.5 | 344.35 |  |
-| 3 | AEGISVOPAK | 86.0 | 32.1 | 66.7 | 8.2 | 49.9 | 0.0 | 314.95 |  |
-| 4 | ICICIBANK | 65.0 | -0.6 | 5.2 | 0.0 | 20.8 | 8.5 | 1338.9 |  |
-| 5 | GOLDIAM | 41.0 | -31.2 | 11.9 | -9.8 | 53.2 | 34.7 | 326.75 |  |
-| 6 | BRIGADE | 37.0 | 14.0 | -4.5 | -37.1 | 52.5 | 40.3 | 621.7 |  |
-| 7 | INFY | 35.5 | 0.0 | -15.9 | -25.8 | 34.7 | 37.8 | 1051.4 |  |
-| 8 | RELIANCE | 35.0 | -6.3 | -12.1 | -5.2 | 22.0 | 23.0 | 1226.4 |  |
-| 9 | HDFCBANK | 33.5 | -6.3 | -13.0 | -25.6 | 26.7 | 27.6 | 731.0 |  |
-| 10 | TCS | 33.0 | -0.9 | -12.6 | -26.7 | 33.3 | 36.7 | 2105.0 |  |
-
-
-**Skipped: less than about 12 months of history or not trading recently:** MWL
+| rank | symbol | score | ret_3m_% | ret_6m_% | ret_1y_% | ret_12m_ex1m_% | volatility_% | below_52w_high_% | close | flag |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | PAYTM | 91.8 | 69.7 | 86.3 | 57.1 | 36.2 | 44.2 | 0.0 | 1849.9 |  |
+| 2 | MWL | 87.3 | 13.1 | 68.7 | 67.6 | 62.3 | 34.8 | 1.2 | 42.52 |  |
+| 3 | AEGISVOPAK | 80.0 | 32.1 | 79.6 | 29.9 | 10.0 | 49.5 | 0.0 | 314.95 |  |
+| 4 | PFOCUS | 73.6 | 48.6 | 21.6 | 87.1 | 53.6 | 52.6 | 1.5 | 344.35 |  |
+| 5 | BRIGADE | 55.5 | 14.0 | 30.6 | -11.6 | -11.0 | 42.5 | 20.4 | 621.7 |  |
+| 6 | ICICIBANK | 54.1 | -0.6 | 9.5 | -4.5 | 0.7 | 20.5 | 8.5 | 1338.9 |  |
+| 7 | GOLDIAM | 53.2 | -8.2 | 54.5 | 9.3 | 21.5 | 58.5 | 14.9 | 326.75 |  |
+| 8 | HDFCBANK | 30.0 | -6.3 | -1.8 | -24.4 | -25.0 | 25.8 | 27.6 | 731.0 |  |
+| 9 | RELIANCE | 25.9 | -6.3 | -12.9 | -12.9 | -6.7 | 22.0 | 23.0 | 1226.4 |  |
+| 10 | INFY | 25.5 | 0.0 | -16.3 | -31.7 | -26.6 | 34.3 | 37.8 | 1051.4 |  |
+| 11 | TCS | 23.2 | -0.9 | -11.7 | -33.6 | -27.5 | 33.3 | 36.7 | 2105.0 |  |
 
 
-*Research shortlist only, not investment advice. 'check chart' = a 1-day move above 35% remains after adjustment; verify it.*
+## Bonus / split adjustments applied
+
+| symbol | ex-date | factor | source |
+|---|---|---|---|
+| HDFCBANK | 2025-08-26 | 0.5 | manual |
+| BRIGADE | 2026-06-17 | 0.75 | manual |
+| GOLDIAM | 2026-07-10 | 0.75 | manual |
+| MWL | 2026-07-10 | 0.1 | yahoo |
+
+
+*Research shortlist only, not investment advice. Returns use trading-day counts (3m = 63, 6m = 126, 1y = 252 days), so they differ slightly from calendar-based figures on other sites. ret_12m_ex1m skips the latest month.*
