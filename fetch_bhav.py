@@ -1,163 +1,219 @@
-#!/usr/bin/env python3
-"""Download NSE cash-market bhavcopy files into data/ (one small file per trading day).
+"""Download NSE cash-market bhavcopy files and keep them in data/prices.csv.
 
-- Fetches every weekday in the last ~460 days that is not already stored, newest first.
-  Holidays simply return "not found" and are skipped; they are re-checked cheaply each run,
-  so a day missed by a glitch heals itself on the next run.
-- Stops with a clear error if NSE blocks the requests or changes its file format.
+* First run (or REBUILD=true): downloads about 460 calendar days of history.
+* Later runs: downloads only the days after the last stored date.
+* 404 = no file for that day (weekend / holiday / not published yet) -> skipped.
+* Any real error stops the run but keeps everything downloaded so far.
 """
-import datetime as dt
 import io
 import os
 import sys
 import time
 import zipfile
-from pathlib import Path
+import datetime as dt
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
 
-BASE_URL = os.environ.get("BHAV_BASE_URL", "https://nsearchives.nseindia.com/content/cm").rstrip("/")
-FILE_FMT = "BhavCopy_NSE_CM_0_0_0_{ymd}_F_0000.csv.zip"
-DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
-PAUSE = float(os.environ.get("BHAV_PAUSE", "0.7"))          # polite delay between requests
-RETRY_SLEEP = float(os.environ.get("BHAV_RETRY_SLEEP", "3"))
-
-HISTORY_DAYS = 460          # calendar days of history to keep available
-KEEP_DAYS = 540             # older files are deleted
-SERIES = {"EQ", "BE"}       # normal and trade-to-trade equity series
-MIN_ROWS_PER_DAY = 300      # a real file has ~2000 rows; fewer means a bad/partial file
-NEEDED = ["TckrSymb", "SctySrs", "ClsPric", "PrvsClsgPric"]
-
+URL = ("https://nsearchives.nseindia.com/content/cm/"
+       "BhavCopy_NSE_CM_0_0_0_{d}_F_0000.csv.zip")
+STORE = "data/prices.csv"
+BACKFILL_DAYS = 460
+KEEP_DAYS = 500
+SERIES_PRIORITY = {"EQ": 0, "BE": 1, "BZ": 2}
+REQUIRED = ["TckrSymb", "SctySrs", "ClsPric", "PrvsClsgPric"]
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
     "Accept": "*/*",
     "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.nseindia.com/",
+    "Referer": "https://www.nseindia.com/all-reports",
 }
 
 
-class FormatChanged(Exception):
-    """NSE changed the file layout: needs a human to update the script."""
+class NotAZip(ValueError):
+    pass
 
 
-def get_day(session, day):
-    """Return the zip bytes for `day`, or None if NSE has no file (holiday / not yet published)."""
-    url = f"{BASE_URL}/{FILE_FMT.format(ymd=day.strftime('%Y%m%d'))}"
-    err = "unknown error"
-    for attempt in range(1, 5):
-        try:
-            r = session.get(url, timeout=(10, 60))
-        except requests.RequestException as exc:
-            err = repr(exc)
-        else:
-            if r.status_code == 200:
-                return r.content
-            if r.status_code == 404:
-                return None
-            if r.status_code == 403 and attempt >= 2:
-                return None          # NSE's archive answers 403 for some missing files
-            err = f"HTTP {r.status_code}"
-        time.sleep(RETRY_SLEEP * attempt)
-    raise RuntimeError(f"{day}: giving up after 4 tries ({err})")
+class BadFormat(ValueError):
+    pass
+
+
+class WrongDate(ValueError):
+    pass
 
 
 def parse_bhav(content, day):
-    """Turn a bhavcopy zip into a DataFrame [symbol, close, prev_close]."""
-    with zipfile.ZipFile(io.BytesIO(content)) as zf:
-        names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
+    """Turn the bytes of a bhavcopy zip into a DataFrame [date, symbol, close, prev_close]."""
+    if content[:2] != b"PK":
+        raise NotAZip("response is not a zip file")
+    with zipfile.ZipFile(io.BytesIO(content)) as z:
+        names = [n for n in z.namelist() if n.lower().endswith(".csv")]
         if not names:
-            raise FormatChanged(f"{day}: no CSV inside the zip file")
-        with zf.open(names[0]) as fh:
-            raw = pd.read_csv(fh)
+            raise BadFormat("no csv file inside the zip")
+        with z.open(names[0]) as f:
+            raw = pd.read_csv(f, dtype=str)
     raw.columns = [str(c).strip() for c in raw.columns]
-    missing = [c for c in NEEDED if c not in raw.columns]
+
+    missing = [c for c in REQUIRED if c not in raw.columns]
     if missing:
-        raise FormatChanged(f"{day}: columns {missing} not found. Header is: {list(raw.columns)}")
+        raise BadFormat(f"missing columns {missing}; file has {list(raw.columns)}")
 
-    if "TradDt" in raw.columns and len(raw):
-        file_day = pd.to_datetime(str(raw["TradDt"].iloc[0]).strip(), format="%Y-%m-%d", errors="coerce")
-        if pd.notna(file_day) and file_day.date() != day:
-            raise ValueError(f"file contains {file_day.date()} instead of {day}")
+    if "TradDt" in raw.columns:
+        d = pd.to_datetime(raw["TradDt"], errors="coerce").dropna()
+        if len(d) and d.iloc[0].date() != day:
+            raise WrongDate(f"file says {d.iloc[0].date()}, expected {day}")
 
-    raw = raw[raw["SctySrs"].astype(str).str.strip().isin(SERIES)]
-    out = pd.DataFrame({
-        "symbol": raw["TckrSymb"].astype(str).str.strip().str.upper(),
-        "close": pd.to_numeric(raw["ClsPric"], errors="coerce"),
-        "prev_close": pd.to_numeric(raw["PrvsClsgPric"], errors="coerce"),
-    })
-    out = out.dropna()
-    out = out[(out["close"] > 0) & (out["prev_close"] > 0)]
-    return out.drop_duplicates("symbol", keep="first").reset_index(drop=True)
+    raw["SctySrs"] = raw["SctySrs"].str.strip().str.upper()
+    raw = raw[raw["SctySrs"].isin(SERIES_PRIORITY)].copy()
+    if raw.empty:
+        raise BadFormat("no EQ/BE/BZ rows in file")
+
+    raw["symbol"] = raw["TckrSymb"].str.strip().str.upper()
+    raw["close"] = pd.to_numeric(raw["ClsPric"], errors="coerce")
+    prev = pd.to_numeric(raw["PrvsClsgPric"], errors="coerce")
+    raw["prev_close"] = prev.where(prev > 0)
+    raw["prio"] = raw["SctySrs"].map(SERIES_PRIORITY)
+
+    raw = raw[raw["close"] > 0]
+    raw = raw.sort_values("prio").drop_duplicates("symbol")
+    out = raw[["symbol", "close", "prev_close"]].copy()
+    out.insert(0, "date", pd.Timestamp(day))
+    return out.reset_index(drop=True)
+
+
+def make_session():
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    try:                                    # warm-up request for cookies; failure is fine
+        s.get("https://www.nseindia.com/", timeout=20)
+    except requests.RequestException:
+        pass
+    return s
+
+
+def fetch_day(session, day):
+    """Return (status, DataFrame|None, note).
+
+    status: ok      -> DataFrame returned
+            none    -> NSE has no file for that day (404, or file for another date)
+            denied  -> 403 or a non-zip answer (missing file OR NSE blocking us)
+            error   -> server / network trouble even after retries
+    """
+    url = URL.format(d=day.strftime("%Y%m%d"))
+    note = ""
+    denied_tries = 0
+    for attempt in range(4):
+        try:
+            r = session.get(url, timeout=40)
+        except requests.RequestException as e:
+            note = type(e).__name__
+            time.sleep(4 * (attempt + 1))
+            continue
+
+        if r.status_code == 404:
+            return "none", None, ""
+        if r.status_code == 200:
+            try:
+                return "ok", parse_bhav(r.content, day), ""
+            except WrongDate as e:
+                return "none", None, str(e)
+            except NotAZip:
+                denied_tries += 1
+                note = "200 but not a zip (NSE block page?)"
+            except BadFormat as e:
+                raise SystemExit(f"{day}: NSE file format changed -> {e}")
+        elif r.status_code == 403:
+            denied_tries += 1
+            note = "HTTP 403"
+        else:
+            note = f"HTTP {r.status_code}"
+
+        if denied_tries >= 2:
+            return "denied", None, note
+        time.sleep(4 * (attempt + 1))
+    return "error", None, note
+
+
+def load_store():
+    if not os.path.exists(STORE):
+        return None
+    df = pd.read_csv(STORE, parse_dates=["date"])
+    need = {"date", "symbol", "close", "prev_close"}
+    if not need.issubset(df.columns):
+        raise SystemExit(f"{STORE} has unexpected columns {list(df.columns)}; "
+                         "run the workflow with 'rebuild' ticked.")
+    return df
+
+
+def save_store(df, today):
+    cutoff = pd.Timestamp(today - dt.timedelta(days=KEEP_DAYS))
+    df = df[df["date"] >= cutoff]
+    df = df.drop_duplicates(["date", "symbol"], keep="last")
+    df = df.sort_values(["date", "symbol"])
+    os.makedirs(os.path.dirname(STORE), exist_ok=True)
+    df.to_csv(STORE, index=False, date_format="%Y-%m-%d")
+    return df
 
 
 def main():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
     today = dt.datetime.now(ZoneInfo("Asia/Kolkata")).date()
-    window_start = today - dt.timedelta(days=HISTORY_DAYS)
-    have = {p.name[:10] for p in DATA_DIR.glob("*.csv.gz")}
+    rebuild = os.environ.get("REBUILD", "false").strip().lower() == "true"
+    store = None if rebuild else load_store()
 
-    todo, d = [], today
-    while d >= window_start:                      # newest first
-        if d.weekday() < 5 and d.isoformat() not in have:
-            todo.append(d)
-        d -= dt.timedelta(days=1)
-    print(f"Stored days: {len(have)} | weekdays to check: {len(todo)}")
+    if store is None or store.empty:
+        store = pd.DataFrame(columns=["date", "symbol", "close", "prev_close"])
+        start = today - dt.timedelta(days=BACKFILL_DAYS)
+        print(f"No stored history -> backfilling from {start}")
+    else:
+        start = store["date"].max().date() + dt.timedelta(days=1)
+        print(f"Stored history ends {store['date'].max().date()} -> fetching from {start}")
 
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    saved = absent_streak = 0
+    days = [start + dt.timedelta(days=n) for n in range((today - start).days + 1)]
+    if not days:
+        print("Already up to date.")
+        return 0
 
-    def check_blocked():
-        if saved == 0 and absent_streak >= 15 and len(have) < 200:
-            sys.exit("ERROR: the first 15 requests returned nothing usable. NSE is probably blocking "
-                     "this server (or the URL changed). See the README 'If NSE blocks' section.")
+    session = make_session()
+    frames = []
+    counts = {"ok": 0, "none": 0, "denied": 0, "error": 0}
+    fatal = None
 
-    for day in todo:
-        content = get_day(session, day)
-        if content is None:
-            absent_streak += 1
-            check_blocked()
-            time.sleep(PAUSE)
-            continue
-        try:
-            df = parse_bhav(content, day)
-        except FormatChanged as exc:
-            sys.exit(f"ERROR: NSE file format changed - {exc}")
-        except (zipfile.BadZipFile, ValueError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
-            print(f"WARNING: {day} skipped ({exc}); it will be retried next run")
-            absent_streak += 1
-            check_blocked()
-            time.sleep(PAUSE)
-            continue
-        if len(df) < MIN_ROWS_PER_DAY:
-            print(f"WARNING: {day} has only {len(df)} rows; skipped, will be retried next run")
-            time.sleep(PAUSE)
-            continue
-        df.to_csv(DATA_DIR / f"{day.isoformat()}.csv.gz", index=False, compression="gzip")
-        saved += 1
-        absent_streak = 0
-        have.add(day.isoformat())
-        if saved % 25 == 0:
-            print(f"  ...{saved} days downloaded")
-        time.sleep(PAUSE)
+    for day in days:
+        status, df, note = fetch_day(session, day)
+        counts[status] += 1
+        if status == "ok":
+            frames.append(df)
+            print(f"{day}  ok      {len(df)} symbols", flush=True)
+        elif status == "error":
+            fatal = f"{day}: {note} (server/network problem). Progress so far is saved; re-run later."
+            break
+        elif status == "denied" and counts["ok"] == 0 and counts["denied"] >= 6:
+            fatal = (f"NSE refused {counts['denied']} requests in a row with no success "
+                     f"(last: {note}). GitHub's servers are probably blocked by NSE.")
+            break
+        time.sleep(0.7)
 
-    cutoff = (today - dt.timedelta(days=KEEP_DAYS)).isoformat()
-    removed = 0
-    for p in DATA_DIR.glob("*.csv.gz"):
-        if p.name[:10] < cutoff:
-            p.unlink()
-            removed += 1
+    if frames:
+        parts = ([store] if len(store) else []) + frames
+        store = pd.concat(parts, ignore_index=True)
+        store["date"] = pd.to_datetime(store["date"])
 
-    dates = sorted(p.name[:10] for p in DATA_DIR.glob("*.csv.gz"))
-    print(f"Downloaded {saved} new day(s), removed {removed} old file(s). "
-          f"Stored: {len(dates)} days ({dates[0] if dates else '-'} to {dates[-1] if dates else '-'})")
-    if not dates or (today - dt.date.fromisoformat(dates[-1])).days > 7:
-        sys.exit("ERROR: no recent data (newest file is older than 7 days). "
-                 "NSE may be blocking requests or the URL/format changed.")
+    if len(store):
+        store = save_store(store, today)
+        print(f"Saved {STORE}: {len(store):,} rows, {store['date'].nunique()} trading days, "
+              f"{store['date'].min().date()} -> {store['date'].max().date()}")
+
+    print(f"Summary: {counts}")
+    if fatal:
+        print("ERROR:", fatal)
+        return 1
+    if not frames:
+        print("No new files (weekend, holiday, or today's file not published yet). "
+              "That is normal.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
