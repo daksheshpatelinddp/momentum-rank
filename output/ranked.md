@@ -1,6 +1,6 @@
 # Momentum ranking (data up to 2026-09-18)
 
-Ranked **9** of 9 symbols. Score is 0-100 (percentile-based, relative to this list only).
+Ranked **9** of 10 symbols. Score is 0-100 (percentile-based, relative to this list only).
 
 | rank | symbol | score | ret_3m_% | ret_6m_% | ret_12m_ex1m_% | volatility_% | below_52w_high_% | close | flag |
 |---|---|---|---|---|---|---|---|---|---|
@@ -13,6 +13,9 @@ Ranked **9** of 9 symbols. Score is 0-100 (percentile-based, relative to this li
 | 7 | RELIANCE | 33.9 | -6.3 | -12.1 | -5.2 | 22.0 | 23.0 | 1226.4 |  |
 | 8 | HDFCBANK | 32.2 | -6.3 | -13.0 | -25.6 | 26.7 | 27.6 | 731.0 |  |
 | 9 | TCS | 31.7 | -0.9 | -12.6 | -26.7 | 33.3 | 36.7 | 2105.0 |  |
+
+
+**Skipped: less than about 12 months of history or not trading recently:** MWL
 
 
 *Research shortlist only, not investment advice. 'check chart' = a 1-day move above 35% remains after adjustment; verify it.*
