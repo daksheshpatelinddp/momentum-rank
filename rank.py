@@ -16,6 +16,7 @@ from adjust import raw_close_matrix, apply_events
 from events import load_manual, gather_events, estimate_factor
 
 STORE = "data/prices.csv"
+BSE_STORE = "data/prices_bse.csv"
 OUT_CSV = "output/ranked.csv"
 OUT_MD = "output/ranked.md"
 # Look-backs are calendar days, like Screener / Chartink: 3m = 90, 6m = 180, 1y = 365 days.
@@ -89,6 +90,17 @@ def main(get_splits=None, api_getter=None):
         notes.append(f"WARNING: latest price data is {age} days old ({as_of.date()}).")
 
     raw = raw_close_matrix(store, symbols)
+    bse, bse_syms, tickers = None, [], {}
+    if os.path.exists(BSE_STORE):
+        bse = pd.read_csv(BSE_STORE, parse_dates=["date"], dtype={"code": str})
+        if len(bse):
+            todo = [s for s in symbols if s not in raw.columns]
+            rb = raw_close_matrix(bse, todo)
+            bse_syms = list(rb.columns)
+            raw = raw.join(rb, how="outer")
+            codes = bse.drop_duplicates("symbol", keep="last").set_index("symbol")["code"]
+            tickers = {s: (f"{codes[s]}.BO" if str(codes.get(s, "")).strip() not in ("", "nan")
+                           else f"{s}.BO") for s in bse_syms}
     ref = max(pd.Timestamp(today), as_of)          # reference date for the look-backs
     d = {k: ref - pd.Timedelta(days=n) for k, n in LOOKBACKS.items()}
     if pd.Timestamp(all_dates[0]) > d["y1"]:
@@ -104,7 +116,8 @@ def main(get_splits=None, api_getter=None):
     events, rejected, ca_status, unverified, mm = gather_events(
         store, raw[have], have, manual, get_splits=get_splits, api_getter=api_getter,
         skip_yahoo=os.environ.get("SKIP_YAHOO", "").strip() == "1",
-        skip_api=os.environ.get("SKIP_API", "").strip() == "1")
+        skip_api=os.environ.get("SKIP_API", "").strip() == "1",
+        bse=bse, bse_symbols=bse_syms, calendar=all_dates, yahoo_tickers=tickers)
     px = apply_events(raw[have], events)
     if unverified:
         notes.append("WARNING: corporate actions could not be checked for: "
@@ -125,7 +138,7 @@ def main(get_splits=None, api_getter=None):
 
     if px.shape[1] == 0:
         md = ("# Momentum ranking\n\nNo stock in symbols.txt had enough price history.\n\n"
-              f"Not found in NSE data: {', '.join(not_found) or 'none'}\n\n"
+              f"Not found in NSE or BSE data: {', '.join(not_found) or 'none'}\n\n"
               f"Too little history or not trading recently: {', '.join(short) or 'none'}\n")
         write_reports(md, pd.DataFrame(columns=["rank", "symbol", "score"]))
         print(md)
@@ -221,7 +234,7 @@ def main(get_splits=None, api_getter=None):
         md.append("\n**Yahoo reported these events but NSE prices do not show the drop, so they "
                   "were NOT applied (check the chart):**\n\n" + md_table(rj) + "\n")
     if not_found:
-        md.append("\n**Not found in NSE data** (typo, renamed, SME or not listed): "
+        md.append("\n**Not found in NSE or BSE data** (typo, renamed, SME or not listed): "
                   + ", ".join(not_found) + "\n")
     if short:
         md.append("\n**Skipped: less than about 12 months of history or not trading "

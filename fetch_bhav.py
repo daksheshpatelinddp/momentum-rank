@@ -97,7 +97,7 @@ def make_session():
     return s
 
 
-def fetch_day(session, day):
+def fetch_day(session, day, url_tmpl=URL, parser=None, datefmt="%Y%m%d", retry_sleep=4):
     """Return (status, DataFrame|None, note).
 
     status: ok      -> DataFrame returned
@@ -105,7 +105,8 @@ def fetch_day(session, day):
             denied  -> 403 or a non-zip answer (missing file OR NSE blocking us)
             error   -> server / network trouble even after retries
     """
-    url = URL.format(d=day.strftime("%Y%m%d"))
+    parser = parser or parse_bhav
+    url = url_tmpl.format(d=day.strftime(datefmt))
     note = ""
     denied_tries = 0
     for attempt in range(4):
@@ -113,14 +114,14 @@ def fetch_day(session, day):
             r = session.get(url, timeout=40)
         except requests.RequestException as e:
             note = type(e).__name__
-            time.sleep(4 * (attempt + 1))
+            time.sleep(retry_sleep * (attempt + 1))
             continue
 
         if r.status_code == 404:
             return "none", None, ""
         if r.status_code == 200:
             try:
-                return "ok", parse_bhav(r.content, day), ""
+                return "ok", parser(r.content, day), ""
             except WrongDate as e:
                 return "none", None, str(e)
             except NotAZip:
@@ -136,7 +137,7 @@ def fetch_day(session, day):
 
         if denied_tries >= 2:
             return "denied", None, note
-        time.sleep(4 * (attempt + 1))
+        time.sleep(retry_sleep * (attempt + 1))
     return "error", None, note
 
 

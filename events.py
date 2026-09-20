@@ -53,13 +53,24 @@ def load_manual(path=MANUAL_FILE):
     return df[["symbol", "ex_date", "factor", "note"]].reset_index(drop=True)
 
 
-def _yahoo_splits(symbol):
-    import yfinance as yf
-    return yf.Ticker(symbol + ".NS").splits
+def make_yahoo_getter(tickers=None):
+    """Function symbol -> Yahoo splits Series. NSE stocks use SYMBOL.NS; BSE-only stocks use
+    the ticker given in `tickers` (scrip code + .BO)."""
+    tickers = tickers or {}
+
+    def get(symbol):
+        import yfinance as yf
+        t = yf.Ticker(tickers.get(symbol, symbol + ".NS"))
+        if t.history(period="1mo").empty:          # unknown ticker or no recent trades
+            raise LookupError("no Yahoo price data for " + str(t.ticker))
+        return t.splits
+    return get
 
 
-def fetch_yahoo(symbols, since, get_splits=_yahoo_splits, pause=0.3):
+def fetch_yahoo(symbols, since, get_splits=None, pause=0.3, tickers=None):
     """Return (DataFrame[symbol, date, factor], {symbol: reason it failed})."""
+    if get_splits is None:
+        get_splits = make_yahoo_getter(tickers)
     rows, failed = [], {}
     for s in symbols:
         try:
@@ -324,13 +335,43 @@ def _describe(name, passed, hits, misses):
     return lines
 
 
+def derive_from_bse(bse, calendar):
+    """Events from BSE's own previous close (prev_close vs the last stored close). Only used
+    when the two rows are consecutive trading days, so a missing day cannot fake an event."""
+    df = bse[["date", "symbol", "close", "prev_close"]].copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.drop_duplicates(["date", "symbol"], keep="last")
+    df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
+    cal = pd.DatetimeIndex(sorted(pd.to_datetime(list(calendar))))
+    prev_day = pd.Series(cal[:-1], index=cal[1:])
+    df["prev_day"] = df["date"].map(prev_day)
+    df["prev_row_date"] = df.groupby("symbol")["date"].shift(1)
+    df["prev_row_close"] = df.groupby("symbol")["close"].shift(1)
+    df = df[df["prev_day"].notna() & (df["prev_row_date"] == df["prev_day"])
+            & df["prev_close"].notna()].copy()
+    ratio = df["prev_close"] / df["prev_row_close"]
+    keep = ((ratio - 1).abs() > EVENT_TOL) & (ratio > 0.005) & (ratio < 200)
+    ev = df.loc[keep, ["symbol", "date"]].copy()
+    ev["factor"] = ratio[keep].to_numpy()
+    ev["source"] = "bse-file"
+    ev["note"] = ""
+    return ev.reset_index(drop=True)
+
+
 def gather_events(store, raw_px, symbols, manual, get_splits=None, api_getter=None,
-                  skip_yahoo=False, skip_api=False):
-    """Return (events, rejected_yahoo, status_lines, unverified_symbols)."""
+                  skip_yahoo=False, skip_api=False, bse=None, bse_symbols=(),
+                  calendar=None, yahoo_tickers=None):
+    """Return (events, rejected_yahoo, status_lines, unverified_symbols, market_move).
+
+    `store` is the NSE price store. Stocks in `bse_symbols` come from the BSE store `bse`."""
     status = []
-    exchange = None
+    exchange_parts = []
     covered = set()
     have = [s for s in symbols if s in raw_px.columns]
+    bse_set = set(bse_symbols)
+    nse_have = [s for s in have if s not in bse_set]
+    bse_have = [s for s in have if s in bse_set]
+    a_passed = False
 
     # (a) NSE second daily file, stored by fetch_bhav.py
     evA, noteA = derive_from_store(store)
@@ -347,14 +388,16 @@ def gather_events(store, raw_px, symbols, manual, get_splits=None, api_getter=No
             status.append("NSE daily file: cannot be validated (no known event in "
                           "corporate_actions.csv falls inside the stored data) - not used.")
         if passed:
-            exchange, covered = evA[evA["symbol"].isin(have)], set(have)
+            a_passed = True
+            exchange_parts.append(evA[evA["symbol"].isin(nse_have)])
+            covered |= set(nse_have)
 
     # (b) NSE website API, only if (a) did not work
-    if not covered and not skip_api:
+    if nse_have and not a_passed and not skip_api:
         first = pd.Timestamp(raw_px.index.min())
         last = pd.Timestamp(raw_px.index.max())
-        man_syms = [s for s in manual["symbol"].unique() if s in raw_px.columns]
-        todo = list(dict.fromkeys(have + man_syms))
+        man_syms = [s for s in manual["symbol"].unique() if s in raw_px.columns and s not in bse_set]
+        todo = list(dict.fromkeys(nse_have + man_syms))
         frames, failed = fetch_api_history(todo, first, last, getter=api_getter)
         if not frames:
             why = next(iter(failed.values()), "no answer")
@@ -368,11 +411,30 @@ def gather_events(store, raw_px, symbols, manual, get_splits=None, api_getter=No
             else:
                 status.append("NSE website API: cannot be validated - not used.")
             if passed:
-                exchange = evB[evB["symbol"].isin(have)]
-                covered = {s for s in have if s in frames}
+                exchange_parts.append(evB[evB["symbol"].isin(nse_have)])
+                covered |= {s for s in nse_have if s in frames}
                 if failed:
                     status.append("NSE website API failed for: " + ", ".join(sorted(
-                        s for s in failed if s in have)) + " (Yahoo fallback used)")
+                        s for s in failed if s in nse_have)) + " (Yahoo fallback used)")
+
+    # (d) BSE file, for the stocks that come from BSE
+    if bse_have and bse is not None and calendar is not None:
+        evS = derive_from_bse(bse, calendar)
+        rows = bse.loc[bse["symbol"].isin(manual["symbol"]) & bse["prev_close"].notna(), ["date", "symbol"]]
+        have_bse = set(zip(pd.to_datetime(rows["date"]), rows["symbol"]))
+        passed, hits, misses = validate(evS, manual, lambda s, d: (d, s) in have_bse)
+        if hits or misses:
+            status += _describe("BSE daily file", passed, hits, misses)
+        else:
+            status.append("BSE daily file: cannot be validated (none of your known events is "
+                          "in the BSE data) - not used.")
+        if passed:
+            exchange_parts.append(evS[evS["symbol"].isin(bse_have)])
+            covered |= set(bse_have)
+    if bse_have:
+        status.append("Prices for " + ", ".join(bse_have) + " come from BSE.")
+
+    exchange = pd.concat(exchange_parts, ignore_index=True) if exchange_parts else None
 
     # (c) Yahoo for whatever the exchange sources did not cover
     rest = [s for s in have if s not in covered]
@@ -380,10 +442,11 @@ def gather_events(store, raw_px, symbols, manual, get_splits=None, api_getter=No
     y_failed = {}
     if rest and not skip_yahoo:
         kw = {"get_splits": get_splits} if get_splits else {}
-        yahoo, y_failed = fetch_yahoo(rest, since=pd.Timestamp(raw_px.index.min()), **kw)
+        yahoo, y_failed = fetch_yahoo(rest, since=pd.Timestamp(raw_px.index.min()),
+                                      tickers=yahoo_tickers, **kw)
         n_ok = len(rest) - len(y_failed)
         status.append(f"Yahoo Finance (bonus/split only): checked {n_ok} of {len(rest)} stocks"
-                      + (f"; failed for {', '.join(sorted(y_failed))}" if y_failed else "") + ".")
+                      + (f"; no Yahoo data for {', '.join(sorted(y_failed))}" if y_failed else "") + ".")
     elif rest:
         y_failed = {s: "skipped" for s in rest}
 

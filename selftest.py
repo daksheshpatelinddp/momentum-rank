@@ -11,8 +11,10 @@ import pandas as pd
 
 from adjust import raw_close_matrix, apply_events
 from events import (load_manual, fetch_yahoo, align_event, build_events, derive_from_store,
-                    validate, fetch_api_history, events_from_api, gather_events)
+                    validate, fetch_api_history, events_from_api, gather_events,
+                    derive_from_bse)
 from fetch_bhav import parse_bhav, parse_sec, NotAZip, WrongDate, BadFormat
+from fetch_bse import parse_bse
 
 
 def check(cond, msg):
@@ -210,6 +212,44 @@ def test_parse_sec():
         check(False, "second daily file with the wrong date is rejected")
 
 
+def test_bse():
+    day = dt.date(2026, 1, 5)
+    csv = ("TradDt,FinInstrmId,TckrSymb,SctySrs,ClsPric,PrvsClsgPric\n"
+           "2026-01-05,532356,TRIVENI,A,240.5,239\n2026-01-05,540001,kediacn,B,150,0\n"
+           "2026-01-05,540002,BADPRICE,B,-,10\n").encode()
+    df = parse_bse(csv, day)
+    check(sorted(df["symbol"]) == ["KEDIACN", "TRIVENI"], "BSE file: symbols read (upper-cased), bad prices dropped")
+    check(pd.isna(df.loc[df.symbol == "KEDIACN", "prev_close"].iloc[0]), "BSE file: missing previous close kept as blank")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("x.CSV", csv)
+    check(len(parse_bse(buf.getvalue(), day)) == 2, "BSE file: zipped version also accepted")
+    for bad, exc, label in [(b"<html>error</html>", NotAZip, "BSE file: web page instead of data rejected"),
+                            (csv, WrongDate, "BSE file: wrong date rejected")]:
+        try:
+            parse_bse(bad, dt.date(2026, 1, 6) if exc is WrongDate else day)
+        except exc:
+            print("ok  -", label)
+        else:
+            check(False, label)
+
+    # BSE previous close adjusted on ex-date -> detected; a missing day is not mistaken for an event
+    dates = pd.bdate_range("2026-01-01", periods=30)
+    rows = []
+    for t, d in enumerate(dates):
+        if t == 12:
+            continue                                   # BSE file missing for one day
+        price = 100.0 / (0.5 if t < 20 else 1.0)
+        prev = (100.0 / (0.5 if t - 1 < 20 else 1.0)) if t else np.nan
+        if t == 20:
+            prev = 100.0                               # adjusted base on the ex-date
+        rows.append((d, "AAA", "1", price, prev))
+    bse = pd.DataFrame(rows, columns=["date", "symbol", "code", "close", "prev_close"])
+    ev = derive_from_bse(bse, dates)
+    check(len(ev) == 1 and abs(ev.iloc[0]["factor"] - 0.5) < 1e-9 and ev.iloc[0]["date"] == dates[20],
+          "BSE file: adjusted previous close gives the exact factor")
+
+
 def make_zip(rows, header=None, name="bhav.csv"):
     header = header or ["TradDt", "TckrSymb", "SctySrs", "ClsPric", "PrvsClsgPric"]
     text = ",".join(header) + "\n" + "\n".join(",".join(map(str, r)) for r in rows)
@@ -253,5 +293,6 @@ if __name__ == "__main__":
     test_yahoo_handling()
     test_exchange_sources()
     test_parse_sec()
+    test_bse()
     test_parser()
     print("ALL SELFTESTS PASSED")
