@@ -2,7 +2,7 @@
 
 Ranked **14** of 19 symbols. Score is 0-100 (percentile-based, relative to this list only).
 
-- WARNING: corporate actions could not be checked for: MINOLTAF, GUJINJEC. A rights issue, demerger or bonus that is not in corporate_actions.csv would make their returns wrong.
+- WARNING: corporate actions could not be checked for: JBCHEPHARM, MINOLTAF, GUJINJEC. A rights issue, demerger or bonus that is not in corporate_actions.csv would make their returns wrong.
 
 | rank | symbol | score | ret_3m_% | ret_6m_% | ret_1y_% | ret_12m_ex1m_% | volatility_% | below_52w_high_% | close | flag |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -36,7 +36,7 @@ Ranked **14** of 19 symbols. Score is 0-100 (percentile-based, relative to this 
   - expected GOLDIAM 2026-07-10 factor 0.75, source showed no change
   - expected TRIVENI 2026-07-22 factor 0.603, source showed no change
 - Prices for MINOLTAF, GUJINJEC come from BSE.
-- Yahoo Finance (bonus/split only): checked 13 of 15 stocks; no Yahoo data for GUJINJEC, MINOLTAF.
+- Yahoo Finance (bonus/split only): checked 13 of 16 stocks; no Yahoo data for GUJINJEC, JBCHEPHARM, MINOLTAF.
 
 
 ## Corporate-action adjustments applied
@@ -61,10 +61,10 @@ These stocks fell sharply in one day. If the announcement shows a spin-off, deme
 | GUJINJEC | 2026-07-08 | -89.7 | 0.1049 | GUJINJEC,2026-07-08,auto,check announcement |
 
 
-**Not found in NSE or BSE data** (typo, renamed, SME or not listed): INDRADIA, JBCHEMPHARMA, MRSS, KEDIACN
+**Not found in NSE or BSE data** (typo, renamed, SME or not listed): INDRADIA, MRSS, KEDIACN
 
 
-**Skipped: less than about 12 months of history or not trading recently:** GUJENERGY
+**Skipped: less than about 12 months of history or not trading recently:** JBCHEPHARM, GUJENERGY
 
 
 *Research shortlist only, not investment advice. Returns look back 90 / 180 / 365 calendar days from today, like Screener, so small differences remain if another site used a different day. ret_12m_ex1m skips the latest month.*
