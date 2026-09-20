@@ -9,9 +9,9 @@ on:
         default: false
   push:
     branches: [main]
-    paths: [symbols.txt]
+    paths: [symbols.txt]          # editing symbols.txt runs the ranking automatically
   schedule:
-    - cron: "30 4 * * 6"
+    - cron: "30 4 * * 6"          # Saturday 10:00 AM IST (04:30 UTC)
 
 permissions:
   contents: write
@@ -42,6 +42,10 @@ jobs:
         env:
           REBUILD: ${{ inputs.rebuild || 'false' }}
         run: python fetch_bhav.py
+
+      - name: Download BSE bhavcopy (only for stocks not on NSE)
+        continue-on-error: true
+        run: python fetch_bse.py
 
       - name: Rank stocks
         run: python rank.py
