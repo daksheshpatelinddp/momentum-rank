@@ -24,6 +24,8 @@ FACTOR_TOL = 0.03             # a source "reproduces" a known event if factors a
 
 
 def load_manual(path=MANUAL_FILE):
+    """Read corporate_actions.csv. factor may be a number or the word auto (= estimate it from
+    NSE prices on the ex-date)."""
     empty = pd.DataFrame(columns=["symbol", "ex_date", "factor", "note"])
     if not os.path.exists(path):
         return empty
@@ -40,12 +42,14 @@ def load_manual(path=MANUAL_FILE):
     df = df.dropna(subset=["symbol", "ex_date", "factor"]).copy()
     df["symbol"] = df["symbol"].str.strip().str.upper()
     df["ex_date"] = pd.to_datetime(df["ex_date"].str.strip(), errors="coerce")
-    df["factor"] = pd.to_numeric(df["factor"].str.strip(), errors="coerce")
+    raw_factor = df["factor"].str.strip().str.lower()
+    is_auto = raw_factor == "auto"
+    df["factor"] = pd.to_numeric(raw_factor.where(~is_auto), errors="coerce")
     df["note"] = df["note"].fillna("").str.strip()
-    bad = df[df["ex_date"].isna() | df["factor"].isna() | (df["factor"] <= 0)]
+    bad = df[df["ex_date"].isna() | (df["factor"].isna() & ~is_auto) | (df["factor"] <= 0)]
     if len(bad):
         raise SystemExit(f"{path} has invalid rows for: {', '.join(bad['symbol'])}. "
-                         "Use YYYY-MM-DD dates and a positive factor.")
+                         "Use YYYY-MM-DD dates and a positive factor (or the word auto).")
     return df[["symbol", "ex_date", "factor", "note"]].reset_index(drop=True)
 
 
@@ -110,18 +114,41 @@ def align_event(series, date, factor, tol=CONFIRM_TOL, tie=0.03):
     return best_d
 
 
+def estimate_factor(series, date, market_move=None):
+    """Estimate the price factor of an event from NSE prices alone: the ex-date's raw 1-day
+    price ratio with the market's typical move that day removed. Rough (a few %), exact
+    factors from the announcement are better."""
+    s = series.dropna()
+    if date not in s.index:
+        return None
+    pos = s.index.get_loc(date)
+    if pos == 0:
+        return None
+    ratio = float(s.iloc[pos] / s.iloc[pos - 1])
+    m = 0.0
+    if market_move is not None and date in market_move.index and pd.notna(market_move[date]):
+        m = float(market_move[date])
+    return round(ratio / (1.0 + m), 4)
+
+
 def _near_existing(existing, symbol, date, days):
     return any(e[0] == symbol and abs((e[1] - date).days) <= days for e in existing)
 
 
-def build_events(raw_px, manual, yahoo, exchange=None, dedupe_days=3):
+def build_events(raw_px, manual, yahoo, exchange=None, dedupe_days=3, market_move=None):
     """Combine manual + exchange + confirmed Yahoo events. Returns (events, rejected_yahoo)."""
     out, rejected = [], []
     first, last = raw_px.index.min(), raw_px.index.max()
 
     for r in manual.itertuples(index=False):
         if r.symbol in raw_px.columns and first < r.ex_date <= last:
-            out.append((r.symbol, r.ex_date, float(r.factor), "manual", r.note))
+            if pd.isna(r.factor):                              # factor = auto
+                f = estimate_factor(raw_px[r.symbol], r.ex_date, market_move)
+                if f is None:
+                    continue
+                out.append((r.symbol, r.ex_date, f, "manual (estimated)", r.note))
+            else:
+                out.append((r.symbol, r.ex_date, float(r.factor), "manual", r.note))
 
     if exchange is not None:
         for r in exchange.itertuples(index=False):
@@ -269,7 +296,7 @@ def validate(found, manual, checkable):
     """Does this source reproduce the events you listed in corporate_actions.csv?"""
     hits, misses = [], []
     for m in manual.itertuples(index=False):
-        if not checkable(m.symbol, m.ex_date):
+        if pd.isna(m.factor) or not checkable(m.symbol, m.ex_date):
             continue
         near = found[(found["symbol"] == m.symbol) &
                      ((found["date"] - m.ex_date).abs() <= pd.Timedelta(days=4))]
@@ -360,7 +387,9 @@ def gather_events(store, raw_px, symbols, manual, get_splits=None, api_getter=No
     elif rest:
         y_failed = {s: "skipped" for s in rest}
 
-    events, rejected = build_events(raw_px[have], manual, yahoo, exchange)
+    ok_rows = store[(store["prev_close"] > 0) & (store["close"] > 0)]
+    mm = (ok_rows["close"] / ok_rows["prev_close"] - 1).groupby(pd.to_datetime(ok_rows["date"])).median()
+    events, rejected = build_events(raw_px[have], manual, yahoo, exchange, market_move=mm)
     manual_syms = set(manual["symbol"])
     unverified = [s for s in rest if s in y_failed and s not in manual_syms]
-    return events, rejected, status, unverified
+    return events, rejected, status, unverified, mm

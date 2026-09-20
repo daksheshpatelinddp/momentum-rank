@@ -2,8 +2,11 @@
 # factor = the price multiplier for all earlier prices:
 #   1:1 bonus or 1:2 split -> 0.5     1:3 bonus -> 0.75     1:2 bonus -> 0.6667
 #   2:1 bonus -> 0.3333               5:1 split -> 0.2      10:1 reverse split -> 10
+# You can write the word auto instead of a number: the factor is then estimated from NSE prices
+# on the ex-date (rough, a few %). An exact factor from the announcement is always better.
 # ex_date = first trading day the price is lower. Keep notes free of commas.
 symbol,ex_date,factor,note
 HDFCBANK,2025-08-26,0.5,1:1 bonus
 BRIGADE,2026-06-17,0.75,1:3 bonus
 GOLDIAM,2026-07-10,0.75,1:3 bonus
+TRIVENI,2026-07-22,0.603,spin-off (checked against Screener returns)

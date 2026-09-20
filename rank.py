@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from adjust import raw_close_matrix, apply_events
-from events import load_manual, gather_events
+from events import load_manual, gather_events, estimate_factor
 
 STORE = "data/prices.csv"
 OUT_CSV = "output/ranked.csv"
@@ -101,7 +101,7 @@ def main(get_splits=None, api_getter=None):
 
     # ---- corporate actions -------------------------------------------------------------
     manual = load_manual()
-    events, rejected, ca_status, unverified = gather_events(
+    events, rejected, ca_status, unverified, mm = gather_events(
         store, raw[have], have, manual, get_splits=get_splits, api_getter=api_getter,
         skip_yahoo=os.environ.get("SKIP_YAHOO", "").strip() == "1",
         skip_api=os.environ.get("SKIP_API", "").strip() == "1")
@@ -140,12 +140,14 @@ def main(get_splits=None, api_getter=None):
     r1y = p_now / p1y - 1
     near_high = p_now / px.loc[d["y1"]:].max()
     worst_day = daily.loc[d["y1"]:].min()
+    worst_date = daily.loc[d["y1"]:].idxmin()
     best_day = daily.loc[d["y1"]:].max()
     last = p_now
 
     m = pd.DataFrame({"r3": r3, "r6": r6, "r12_1": r12_1, "r1y": r1y,
                       "r6_per_vol": r6 / vol, "near_high": near_high, "vol": vol,
-                      "close": last, "worst_day": worst_day, "best_day": best_day})
+                      "close": last, "worst_day": worst_day, "best_day": best_day,
+                      "worst_date": worst_date})
     bad = m.index[m[list(WEIGHTS)].isna().any(axis=1)].tolist()
     m = m.drop(index=bad)
 
@@ -158,7 +160,7 @@ def main(get_splits=None, api_getter=None):
         if sym in unverified:
             f.append("unverified")
         if row.worst_day <= DROP_FLAG:
-            f.append("big 1-day drop: bonus/split?")
+            f.append("big 1-day drop: corporate action?")
         if row.best_day >= JUMP_FLAG:
             f.append("big 1-day jump: check")
         return "; ".join(f)
@@ -198,6 +200,21 @@ def main(get_splits=None, api_getter=None):
         md.append("\n## Corporate-action adjustments applied\n\n" + md_table(evt) + "\n")
     else:
         md.append("\nNo corporate-action adjustments were needed for these stocks.\n")
+    sus = m[m["worst_day"] <= DROP_FLAG]
+    if len(sus):
+        rows = []
+        for sym, r in sus.iterrows():
+            est = estimate_factor(raw[sym], pd.Timestamp(r["worst_date"]), mm)
+            rows.append((sym, pd.Timestamp(r["worst_date"]).strftime("%Y-%m-%d"),
+                         f"{r['worst_day'] * 100:.1f}", est if est is not None else "",
+                         f"{sym},{pd.Timestamp(r['worst_date']).strftime('%Y-%m-%d')},auto,check announcement"))
+        sg = pd.DataFrame(rows, columns=["symbol", "date", "1-day move %", "estimated factor",
+                                         "line to add to corporate_actions.csv"])
+        md.append("\n## Possible corporate actions not adjusted - please check\n\n"
+                  "These stocks fell sharply in one day. If the announcement shows a spin-off, "
+                  "demerger, rights issue, bonus or split with that ex-date, add the line (or the "
+                  "exact factor instead of `auto`) to corporate_actions.csv. If it was a real "
+                  "price fall, ignore it.\n\n" + md_table(sg) + "\n")
     if rejected:
         rj = pd.DataFrame([(s, d.strftime("%Y-%m-%d"), round(f, 4)) for s, d, f in rejected],
                           columns=["symbol", "Yahoo date", "factor"])

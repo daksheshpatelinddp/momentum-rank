@@ -78,6 +78,20 @@ def test_alignment():
           "manual entry wins and is not double counted")
 
 
+def test_auto_estimate():
+    idx = pd.bdate_range("2026-01-01", periods=30)
+    raw = pd.Series(100.0, index=idx)
+    raw.iloc[15:] = 60.0                       # spin-off: -40 % overnight, market flat
+    raw_px = pd.DataFrame({"AAA": raw})
+    manual = pd.DataFrame([("AAA", idx[15], np.nan, "spin-off")],
+                          columns=["symbol", "ex_date", "factor", "note"])
+    mm = pd.Series(0.0, index=idx)
+    ev, _ = build_events(raw_px, manual, pd.DataFrame(columns=["symbol", "date", "factor"]),
+                         market_move=mm)
+    check(len(ev) == 1 and abs(ev.iloc[0]["factor"] - 0.6) < 1e-6 and "estimated" in ev.iloc[0]["source"],
+          "factor 'auto' is estimated from the ex-date price move")
+
+
 def test_manual_file():
     cwd = os.getcwd()
     with tempfile.TemporaryDirectory() as tmp:
@@ -94,6 +108,9 @@ def test_manual_file():
                 print("ok  - invalid corporate_actions.csv row is rejected")
             else:
                 check(False, "invalid corporate_actions.csv row is rejected")
+            open("auto.csv", "w").write("symbol,ex_date,factor,note\nabc,2026-01-05,auto,spin-off\n")
+            a = load_manual("auto.csv")
+            check(len(a) == 1 and pd.isna(a.iloc[0]["factor"]), "factor 'auto' is accepted in corporate_actions.csv")
             open("empty.csv", "w").write("# only comments\n")
             check(load_manual("empty.csv").empty, "comment-only corporate_actions.csv is fine")
         finally:
@@ -151,7 +168,7 @@ def test_exchange_sources():
 
     # full pipeline: file source validated -> rights + demerger applied automatically
     raw = raw_close_matrix(store, list(store["symbol"].unique()))
-    events, rej, status, unver = gather_events(store, raw, ["BON", "RIGHTS", "DEMERG", "S00"], manual,
+    events, rej, status, unver, _mm = gather_events(store, raw, ["BON", "RIGHTS", "DEMERG", "S00"], manual,
                                                skip_yahoo=True, skip_api=True)
     check(set(events["symbol"]) == {"BON", "RIGHTS", "DEMERG"} and not unver,
           "gather_events applies rights issue and demerger automatically")
@@ -166,7 +183,7 @@ def test_exchange_sources():
                  "CH_CLOSING_PRICE": r.close} for r in g.itertuples() if not pd.isna(r.adj_prev)]
     store_x = store.copy()
     store_x["adj_prev"] = store_x["prev_close"]                     # daily file unadjusted
-    events, rej, status, unver = gather_events(store_x, raw, ["BON", "RIGHTS", "S00"], manual,
+    events, rej, status, unver, _mm = gather_events(store_x, raw, ["BON", "RIGHTS", "S00"], manual,
                                                api_getter=getter, skip_yahoo=True)
     check("RIGHTS" in set(events["symbol"]) and any("website API: VALIDATED" in l for l in status),
           "NSE website API is used when the daily file is unadjusted")
@@ -174,7 +191,7 @@ def test_exchange_sources():
     # both refused -> falls back, reports unverified
     def refused(sym, a, b):
         raise ConnectionError("HTTP 403")
-    events, rej, status, unver = gather_events(store_x, raw, ["BON", "S00"], manual,
+    events, rej, status, unver, _mm = gather_events(store_x, raw, ["BON", "S00"], manual,
                                                api_getter=refused, skip_yahoo=True)
     check(unver == ["S00"] and list(events["symbol"]) == ["BON"],
           "when no source works, stocks are reported as unverified")
@@ -232,6 +249,7 @@ if __name__ == "__main__":
     test_adjustment()
     test_alignment()
     test_manual_file()
+    test_auto_estimate()
     test_yahoo_handling()
     test_exchange_sources()
     test_parse_sec()
