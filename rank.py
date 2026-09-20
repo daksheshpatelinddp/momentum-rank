@@ -89,18 +89,21 @@ def main(get_splits=None, api_getter=None):
     if age > 6:
         notes.append(f"WARNING: latest price data is {age} days old ({as_of.date()}).")
 
-    raw = raw_close_matrix(store, symbols)
     bse, bse_syms, tickers = None, [], {}
     if os.path.exists(BSE_STORE):
         bse = pd.read_csv(BSE_STORE, parse_dates=["date"], dtype={"code": str})
-        if len(bse):
-            todo = [s for s in symbols if s not in raw.columns]
-            rb = raw_close_matrix(bse, todo)
-            bse_syms = list(rb.columns)
-            raw = raw.join(rb, how="outer")
-            codes = bse.drop_duplicates("symbol", keep="last").set_index("symbol")["code"]
-            tickers = {s: (f"{codes[s]}.BO" if str(codes.get(s, "")).strip() not in ("", "nan")
-                           else f"{s}.BO") for s in bse_syms}
+        if len(bse):                                   # numeric scrip codes -> BSE Security IDs
+            code_to_sym = bse.drop_duplicates("code", keep="last").set_index("code")["symbol"]
+            symbols = list(dict.fromkeys(code_to_sym.get(t, t) if t.isdigit() else t for t in symbols))
+    raw = raw_close_matrix(store, symbols)
+    if bse is not None and len(bse):
+        todo = [s for s in symbols if s not in raw.columns]
+        rb = raw_close_matrix(bse, todo)
+        bse_syms = list(rb.columns)
+        raw = raw.join(rb, how="outer")
+        codes = bse.drop_duplicates("symbol", keep="last").set_index("symbol")["code"]
+        tickers = {s: (f"{codes[s]}.BO" if str(codes.get(s, "")).strip() not in ("", "nan")
+                       else f"{s}.BO") for s in bse_syms}
     ref = max(pd.Timestamp(today), as_of)          # reference date for the look-backs
     d = {k: ref - pd.Timedelta(days=n) for k, n in LOOKBACKS.items()}
     if pd.Timestamp(all_dates[0]) > d["y1"]:
@@ -124,7 +127,17 @@ def main(get_splits=None, api_getter=None):
                      + ", ".join(unverified) + ". A rights issue, demerger or bonus that is not "
                      "in corporate_actions.csv would make their returns wrong.")
 
-    px = px.ffill(limit=3)
+    # BSE stocks can trade only on some days: carry the last traded price forward, but only
+    # for stocks that traded within the last 30 days.
+    traded = px.loc[d["y1"]:].notna().sum()
+    last_trade = px.apply(lambda c: c.last_valid_index())
+    filled = px.ffill(limit=3)
+    bse_have = [s for s in bse_syms if s in px.columns]
+    if bse_have:
+        filled[bse_have] = px[bse_have].ffill()
+    px = filled
+    stale = [s for s in bse_have
+             if pd.isna(last_trade.get(s)) or last_trade[s] < as_of - pd.Timedelta(days=30)]
 
     def at(date):
         """Last close on or before `date` (NaN if the stock was not trading then)."""
@@ -132,6 +145,8 @@ def main(get_splits=None, api_getter=None):
 
     p_now, p1m, p3m, p6m, p1y = px.iloc[-1], at(d["m1"]), at(d["m3"]), at(d["m6"]), at(d["y1"])
     good = pd.concat([p_now, p1m, p3m, p6m, p1y], axis=1).notna().all(axis=1)
+    for st in stale:
+        good[st] = False
     short = [s for s in have if not good.get(s, False)]
     px = px.loc[:, good[good].index]
     p_now, p1m, p3m, p6m, p1y = (x[px.columns] for x in (p_now, p1m, p3m, p6m, p1y))
@@ -174,6 +189,8 @@ def main(get_splits=None, api_getter=None):
             f.append("unverified")
         if row.worst_day <= DROP_FLAG:
             f.append("big 1-day drop: corporate action?")
+        if sym in traded.index and traded[sym] < 60:
+            f.append(f"thin trading ({int(traded[sym])} days in a year)")
         if row.best_day >= JUMP_FLAG:
             f.append("big 1-day jump: check")
         return "; ".join(f)

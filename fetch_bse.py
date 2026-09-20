@@ -4,7 +4,8 @@ Only the stocks you need are kept (data/prices_bse.csv), so the file stays small
 * First time a new BSE stock appears in symbols.txt: the last ~460 days are scanned once
   (about 10-15 minutes) and the stock is remembered in data/bse_meta.json.
 * Later runs: only the days after the last stored day are downloaded.
-Use BSE's short "Security ID" as the symbol (for example KEDIACN), one per line.
+Write each BSE stock in symbols.txt by its BSE Security ID (for example GOLDIAM) or by its
+numeric scrip code (for example 526729), one per line.
 """
 import io
 import json
@@ -157,7 +158,7 @@ def main():
         counts[status] += 1
         if status == "ok":
             last_ok = day
-            sel = df[df["symbol"].isin(keep)].copy()
+            sel = df[df["symbol"].isin(keep) | df["code"].isin(keep)].copy()
             sel.insert(0, "date", pd.Timestamp(day))
             frames.append(sel)
             print(f"{day}  ok      {len(df)} BSE symbols, {len(sel)} kept", flush=True)
@@ -192,10 +193,13 @@ def main():
             meta["last_date"] = None
         if last_ok is not None or backfill:
             save_meta(meta)
-        found = set(store["symbol"]) if len(store) else set()
+        found = (set(store["symbol"]) | set(store["code"].astype(str))) if len(store) else set()
         lost = [c for c in cand if c not in found]
         if lost:
-            print("Not found on BSE either (typo, renamed, not listed): " + ", ".join(lost))
+            print("No BSE price rows for: " + ", ".join(lost))
+            print("  -> a wrong Security ID, OR the stock had no trades on BSE in the scanned "
+                  "period (BSE's daily file lists only stocks that traded). "
+                  "Try the numeric scrip code instead of the name.")
 
     print(f"Summary: {counts}")
     if fatal:
