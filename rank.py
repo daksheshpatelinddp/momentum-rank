@@ -122,13 +122,9 @@ def main(get_splits=None, api_getter=None):
         skip_api=os.environ.get("SKIP_API", "").strip() == "1",
         bse=bse, bse_symbols=bse_syms, calendar=all_dates, yahoo_tickers=tickers)
     px = apply_events(raw[have], events)
-    if unverified:
-        notes.append("WARNING: corporate actions could not be checked for: "
-                     + ", ".join(unverified) + ". A rights issue, demerger or bonus that is not "
-                     "in corporate_actions.csv would make their returns wrong.")
-
     # BSE stocks can trade only on some days: carry the last traded price forward, but only
     # for stocks that traded within the last 30 days.
+    unfilled = px.copy()
     traded = px.loc[d["y1"]:].notna().sum()
     last_trade = px.apply(lambda c: c.last_valid_index())
     filled = px.ffill(limit=3)
@@ -209,6 +205,11 @@ def main(get_splits=None, api_getter=None):
         "flag": [flag_for(s, r) for s, r in zip(m.index, m.itertuples())],
     })
 
+    unver_ranked = [u for u in unverified if u in set(ranked["symbol"])]
+    if unver_ranked:
+        notes.append("WARNING: corporate actions could not be checked for: "
+                     + ", ".join(unver_ranked) + ". A rights issue, demerger or bonus that is not "
+                     "in corporate_actions.csv would make their returns wrong.")
     ev = events[events["symbol"].isin(ranked["symbol"])]
     md = [f"# Momentum ranking (data up to {as_of.date()})\n",
           f"Ranked **{len(ranked)}** of {len(symbols)} symbols. "
@@ -254,8 +255,24 @@ def main(get_splits=None, api_getter=None):
         md.append("\n**Not found in NSE or BSE data** (typo, renamed, SME or not listed): "
                   + ", ".join(not_found) + "\n")
     if short:
-        md.append("\n**Skipped: less than about 12 months of history or not trading "
-                  "recently:** " + ", ".join(short) + "\n")
+        rows = []
+        for sym in short:
+            col = unfilled[sym].dropna() if sym in unfilled.columns else pd.Series(dtype=float)
+            if col.empty:
+                rows.append((sym, "-", "-", 0, "-", "no prices in the period"))
+                continue
+            first, last, n = col.index[0], col.index[-1], len(col)
+            since = (col.iloc[-1] / col.iloc[0] - 1) * 100
+            if last < as_of - pd.Timedelta(days=5):
+                reason = f"stopped trading or very thin (last trade {last.date()})"
+            elif first > d["y1"]:
+                reason = "listed less than a year ago"
+            else:
+                reason = "price missing on a date needed for the returns"
+            rows.append((sym, first.date(), last.date(), n, f"{since:.1f}", reason))
+        nr = pd.DataFrame(rows, columns=["symbol", "first trade", "last trade", "trading days",
+                                          "return over that period %", "why not ranked"])
+        md.append("\n## Not ranked (not enough usable price history)\n\n" + md_table(nr) + "\n")
     if bad:
         md.append("\n**Skipped: metrics could not be computed:** " + ", ".join(bad) + "\n")
     md.append("\n*Research shortlist only, not investment advice. Returns look back 90 / 180 / "

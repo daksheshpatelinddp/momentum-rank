@@ -42,7 +42,7 @@ HEADERS = {
 }
 
 
-def parse_bse(content, day):
+def parse_bse(content, day, drop_unpriced=True):
     """Bytes of a BSE bhavcopy (csv or zip) -> DataFrame [symbol, code, close, prev_close]."""
     if content[:2] == b"PK":
         with zipfile.ZipFile(io.BytesIO(content)) as z:
@@ -67,11 +67,14 @@ def parse_bse(content, day):
         "symbol": raw["TckrSymb"].astype(str).str.strip().str.upper(),
         "code": raw["FinInstrmId"].astype(str).str.strip() if "FinInstrmId" in raw.columns else "",
         "close": pd.to_numeric(raw["ClsPric"], errors="coerce"),
+        "series": raw["SctySrs"].astype(str).str.strip().str.upper() if "SctySrs" in raw.columns else "",
     })
     prev = pd.to_numeric(raw["PrvsClsgPric"], errors="coerce")
     out["prev_close"] = prev.where(prev > 0)
-    out = out[out["close"] > 0].drop_duplicates("symbol")
-    if out.empty:
+    if drop_unpriced:
+        out = out[out["close"] > 0]
+    out = out.drop_duplicates("symbol")
+    if out.empty or not (out["close"] > 0).any():
         raise BadFormat("no priced rows in file")
     return out.reset_index(drop=True)
 
@@ -91,16 +94,18 @@ def load_meta():
         try:
             with open(META, encoding="utf-8") as f:
                 m = json.load(f)
-            return {"scanned": list(m.get("scanned", [])), "last_date": m.get("last_date")}
+            return {"scanned": list(m.get("scanned", [])), "last_date": m.get("last_date"),
+                    "diag": dict(m.get("diag", {}))}
         except (ValueError, OSError):
             pass
-    return {"scanned": [], "last_date": None}
+    return {"scanned": [], "last_date": None, "diag": {}}
 
 
 def save_meta(meta):
     os.makedirs("data", exist_ok=True)
     with open(META, "w", encoding="utf-8") as f:
-        json.dump({"scanned": sorted(set(meta["scanned"])), "last_date": meta["last_date"]}, f, indent=1)
+        json.dump({"scanned": sorted(set(meta["scanned"])), "last_date": meta["last_date"],
+                   "diag": meta.get("diag", {})}, f, indent=1)
 
 
 def load_store():
@@ -134,6 +139,10 @@ def main():
     meta = load_meta()
     store = load_store()
     need = sorted(watch - set(meta["scanned"]))
+    in_store = (set(store["symbol"]) | set(store["code"].astype(str))) if len(store) else set()
+    unknown = [t for t in cand if t not in in_store and t not in meta["diag"]]
+    if unknown and not need:
+        need = unknown                     # scanned before, but we never learned WHY there were no rows
     backfill = bool(need) or meta["last_date"] is None
 
     if backfill:
@@ -151,13 +160,22 @@ def main():
     session = make_session()
     frames, counts = [], {"ok": 0, "none": 0, "denied": 0, "error": 0}
     last_ok, fatal = None, None
+    tokset, listed, shown_groups = set(cand), set(), False
+    parse_all = lambda content, d: parse_bse(content, d, drop_unpriced=False)
 
     for day in days:
-        status, df, note = fetch_day(session, day, url_tmpl=URL, parser=parse_bse,
+        status, df, note = fetch_day(session, day, url_tmpl=URL, parser=parse_all,
                                      retry_sleep=2)
         counts[status] += 1
         if status == "ok":
             last_ok = day
+            listed |= set(df.loc[df["symbol"].isin(tokset), "symbol"])
+            listed |= set(df.loc[df["code"].isin(tokset), "code"])
+            if not shown_groups:
+                shown_groups = True
+                grp = df["series"].value_counts().head(12)
+                print("BSE file security groups: " + ", ".join(f"{k}:{v}" for k, v in grp.items()))
+            df = df[df["close"] > 0]
             sel = df[df["symbol"].isin(keep) | df["code"].isin(keep)].copy()
             sel.insert(0, "date", pd.Timestamp(day))
             frames.append(sel)
@@ -195,11 +213,23 @@ def main():
             save_meta(meta)
         found = (set(store["symbol"]) | set(store["code"].astype(str))) if len(store) else set()
         lost = [c for c in cand if c not in found]
+        for t in cand:
+            if t in found:
+                meta["diag"].pop(t, None)
+            elif t in listed:
+                meta["diag"][t] = "listed"
+            elif backfill or t not in meta["diag"]:
+                meta["diag"][t] = "absent"
         if lost:
             print("No BSE price rows for: " + ", ".join(lost))
-            print("  -> a wrong Security ID, OR the stock had no trades on BSE in the scanned "
-                  "period (BSE's daily file lists only stocks that traded). "
-                  "Try the numeric scrip code instead of the name.")
+            for t in lost:
+                if meta["diag"].get(t) == "listed":
+                    print(f"  {t}: listed in BSE's file, but with no closing price on any day "
+                          "(it did not trade in the scanned period).")
+                else:
+                    print(f"  {t}: not in BSE's daily file at all (wrong ID, or a segment this "
+                          "file does not include, such as SME).")
+        save_meta(meta)
 
     print(f"Summary: {counts}")
     if fatal:
