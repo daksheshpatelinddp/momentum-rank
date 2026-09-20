@@ -12,7 +12,7 @@ import pandas as pd
 from adjust import raw_close_matrix, apply_events
 from events import (load_manual, fetch_yahoo, align_event, build_events, derive_from_store,
                     validate, fetch_api_history, events_from_api, gather_events,
-                    derive_from_bse)
+                    derive_from_bse, detect_price_events)
 from fetch_bhav import parse_bhav, parse_sec, NotAZip, WrongDate, BadFormat
 from fetch_bse import parse_bse
 
@@ -250,6 +250,33 @@ def test_bse():
           "BSE file: adjusted previous close gives the exact factor")
 
 
+def test_auto_detection():
+    idx = pd.bdate_range("2026-03-02", periods=60)
+    rng = np.random.default_rng(4)
+    base = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 60)))
+    cols = {}
+    a = base.copy(); a[30:] *= 0.1               # 10:1 split, consecutive days traded
+    cols["SPLIT"] = a
+    b = base.copy(); b[30:] *= 0.85              # a 15% fall: could be a real move -> not touched
+    cols["FALL15"] = b
+    c = base.copy(); c[30] *= 0.5                # one bad print that reverses next day
+    cols["SPIKE"] = c
+    d = base.copy(); d[30:] *= 0.3; d[29] = np.nan   # stock did not trade the day before: gap, not an event
+    cols["GAP"] = d
+    e = base.copy(); e[30:] *= 10                # 10:1 consolidation
+    cols["REVERSE"] = e
+    f = base.copy(); f[30:] *= 0.6               # already explained by another source
+    cols["KNOWN"] = f
+    raw = pd.DataFrame(cols, index=idx)
+    known = pd.DataFrame([("KNOWN", idx[30], 0.6, "manual", "")], columns=["symbol", "date", "factor", "source", "note"])
+    ev = detect_price_events(raw, known)
+    got = {r.symbol: r.factor for r in ev.itertuples()}
+    check(set(got) == {"SPLIT", "REVERSE"}, f"automatic check finds only real corporate-action moves (found {sorted(got)})")
+    check(abs(got["SPLIT"] - 0.1) < 0.01 and got["REVERSE"] > 5, "automatic factors: 1/10 for the split, about 10 for the consolidation")
+    px = apply_events(raw[["SPLIT"]], ev)
+    check((px["SPLIT"].pct_change().abs().max()) < 0.06, "after the automatic adjustment the split day shows no fake drop")
+
+
 def make_zip(rows, header=None, name="bhav.csv"):
     header = header or ["TradDt", "TckrSymb", "SctySrs", "ClsPric", "PrvsClsgPric"]
     text = ",".join(header) + "\n" + "\n".join(",".join(map(str, r)) for r in rows)
@@ -294,5 +321,6 @@ if __name__ == "__main__":
     test_exchange_sources()
     test_parse_sec()
     test_bse()
+    test_auto_detection()
     test_parser()
     print("ALL SELFTESTS PASSED")

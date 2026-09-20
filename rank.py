@@ -211,6 +211,10 @@ def main(get_splits=None, api_getter=None):
                      + ", ".join(unver_ranked) + ". A rights issue, demerger or bonus that is not "
                      "in corporate_actions.csv would make their returns wrong.")
     ev = events[events["symbol"].isin(ranked["symbol"])]
+    if len(ev) and ev["source"].astype(str).str.startswith("auto").any():
+        notes.append("Adjustments marked 'auto (estimated)' come from price behaviour alone, so their "
+                     "factors are estimates. Check the announcement and, for an exact factor, add it "
+                     "to corporate_actions.csv.")
     md = [f"# Momentum ranking (data up to {as_of.date()})\n",
           f"Ranked **{len(ranked)}** of {len(symbols)} symbols. "
           "Score is 0-100 (percentile-based, relative to this list only).\n"]

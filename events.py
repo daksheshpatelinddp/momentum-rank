@@ -20,6 +20,8 @@ MANUAL_FILE = "corporate_actions.csv"
 CONFIRM_TOL = 0.30            # |log(raw 1-day ratio / expected factor)| allowed when confirming
 COLS = ["symbol", "date", "factor", "source", "note"]
 EVENT_TOL = 0.015             # ignore |factor - 1| below 1.5 % (rounding noise)
+AUTO_DROP = 0.80             # a 1-day raw ratio below this cannot be a normal price move (bands are 20% or less)
+AUTO_JUMP = 1.60             # ... nor can one above this (reverse split / consolidation)
 FACTOR_TOL = 0.03             # a source "reproduces" a known event if factors agree within 3 %
 
 
@@ -335,6 +337,52 @@ def _describe(name, passed, hits, misses):
     return lines
 
 
+def _snap_factor(est, tol=0.06):
+    """Splits are usually 1:k. Snap an estimate below 0.55 to the nearest 1/k when it is within 6 %."""
+    if est >= 0.55:
+        return est
+    k = max(2, round(1.0 / est))
+    clean = 1.0 / k
+    return clean if abs(est / clean - 1) <= tol else est
+
+
+def detect_price_events(raw_px, existing, market_move=None, drop=AUTO_DROP, jump=AUTO_JUMP,
+                        dedupe_days=3):
+    """Automatic check that needs no announcement: an Indian stock cannot fall by more than
+    20 % (or rise by more than 60 %) between two consecutive trading days by trading alone,
+    so such a move must be a corporate action (split, bonus, spin-off, demerger, capital
+    reduction, consolidation). The factor is ESTIMATED from the price move.
+    Ignored: moves that follow a day without trading (thin stocks can gap), spikes that
+    reverse within 3 days (bad prints), and dates already explained by another event."""
+    known = list(zip(existing["symbol"], existing["date"])) if len(existing) else []
+    out = []
+    for sym in raw_px.columns:
+        s = raw_px[sym]
+        ratio = s / s.shift(1)                    # NaN unless BOTH consecutive market days traded
+        hits = ratio[(ratio < drop) | (ratio > jump)].dropna()
+        for d, r in hits.items():
+            if _near_existing(known, sym, d, dedupe_days):
+                continue
+            pos = s.index.get_loc(d)
+            prev_close = float(s.iloc[pos - 1])
+            after = s.iloc[pos + 1: pos + 4].dropna()
+            if r > 1 and pos >= 2 and pd.notna(s.iloc[pos - 2]) and 0.8 < s.iloc[pos] / s.iloc[pos - 2] < 1.25:
+                continue                          # just recovers from a one-day bad print
+            if len(after):
+                if r < 1 and after.max() / prev_close > 0.85:
+                    continue                      # fell, then came back: a bad print
+                if r > 1 and after.min() / prev_close < 1.25:
+                    continue                      # jumped, then came back
+            m = 0.0
+            if market_move is not None and d in market_move.index and pd.notna(market_move[d]):
+                m = float(market_move[d])
+            est = _snap_factor(float(r) / (1.0 + m))
+            out.append((sym, d, round(est, 4), "auto (estimated)", ""))
+            known.append((sym, d))
+    ev = pd.DataFrame(out, columns=COLS)
+    return ev.sort_values(["date", "symbol"]).reset_index(drop=True)
+
+
 def derive_from_bse(bse, calendar):
     """Events from BSE's own previous close (prev_close vs the last stored close). Only used
     when the two rows are consecutive trading days, so a missing day cannot fake an event."""
@@ -453,6 +501,15 @@ def gather_events(store, raw_px, symbols, manual, get_splits=None, api_getter=No
     ok_rows = store[(store["prev_close"] > 0) & (store["close"] > 0)]
     mm = (ok_rows["close"] / ok_rows["prev_close"] - 1).groupby(pd.to_datetime(ok_rows["date"])).median()
     events, rejected = build_events(raw_px[have], manual, yahoo, exchange, market_move=mm)
+    auto = detect_price_events(raw_px[have], events, mm)
+    if len(auto):
+        events = pd.concat([events, auto], ignore_index=True)
+        events["date"] = pd.to_datetime(events["date"])
+        events = events.sort_values(["date", "symbol"]).reset_index(drop=True)
+        status.append("Automatic price check: found " + str(len(auto)) + " one-day move(s) too large "
+                      "for normal trading (fall over 20% or rise over 60%) with no announcement source "
+                      "confirming them; treated as corporate actions with ESTIMATED factors: "
+                      + ", ".join(f"{r.symbol} {r.date.date()} ({r.factor})" for r in auto.itertuples()) + ".")
     manual_syms = set(manual["symbol"])
     unverified = [s for s in rest if s in y_failed and s not in manual_syms]
     return events, rejected, status, unverified, mm
