@@ -2,7 +2,7 @@
 
 Ranked **15** of 22 symbols. Score is 0-100 (percentile-based, relative to this list only).
 
-- WARNING: corporate actions could not be checked for: INRADIA, JBCHEPHARM, MINOLTAF. A rights issue, demerger or bonus that is not in corporate_actions.csv would make their returns wrong.
+- WARNING: corporate actions could not be checked for: MINOLTAF. A rights issue, demerger or bonus that is not in corporate_actions.csv would make their returns wrong.
 
 | rank | symbol | score | ret_3m_% | ret_6m_% | ret_1y_% | ret_12m_ex1m_% | volatility_% | below_52w_high_% | close | flag |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -58,7 +58,13 @@ Ranked **15** of 22 symbols. Score is 0-100 (percentile-based, relative to this 
 **Not found in NSE or BSE data** (typo, renamed, SME or not listed): MRSS, 539229, KEDIACN, 508993
 
 
-**Skipped: less than about 12 months of history or not trading recently:** INRADIA, JBCHEPHARM, GUJENERGY
+## Not ranked (not enough usable price history)
+
+| symbol | first trade | last trade | trading days | return over that period % | why not ranked |
+|---|---|---|---|---|---|
+| INRADIA | 2025-08-06 | 2026-07-20 | 10 | 40.4 | stopped trading or very thin (last trade 2026-07-20) |
+| JBCHEPHARM | 2025-06-16 | 2026-07-16 | 269 | 38.8 | stopped trading or very thin (last trade 2026-07-16) |
+| GUJENERGY | 2026-07-01 | 2026-09-18 | 57 | -28.0 | listed less than a year ago |
 
 
 *Research shortlist only, not investment advice. Returns look back 90 / 180 / 365 calendar days from today, like Screener, so small differences remain if another site used a different day. ret_12m_ex1m skips the latest month.*

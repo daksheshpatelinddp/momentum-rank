@@ -14,5 +14,11 @@
   "MRSS",
   "TRIVENI"
  ],
- "last_date": "2026-09-18"
+ "last_date": "2026-09-18",
+ "diag": {
+  "MRSS": "absent",
+  "539229": "absent",
+  "KEDIACN": "absent",
+  "508993": "absent"
+ }
 }
