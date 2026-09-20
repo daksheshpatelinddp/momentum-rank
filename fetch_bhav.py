@@ -13,12 +13,16 @@ import zipfile
 import datetime as dt
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 import requests
 
 URL = ("https://nsearchives.nseindia.com/content/cm/"
        "BhavCopy_NSE_CM_0_0_0_{d}_F_0000.csv.zip")
+SEC_URL = ("https://nsearchives.nseindia.com/products/content/"
+           "sec_bhavdata_full_{d}.csv")
 STORE = "data/prices.csv"
+STORE_COLS = ["date", "symbol", "close", "prev_close", "adj_prev"]
 BACKFILL_DAYS = 460
 KEEP_DAYS = 500
 SERIES_PRIORITY = {"EQ": 0, "BE": 1, "BZ": 2}
@@ -136,6 +140,95 @@ def fetch_day(session, day):
     return "error", None, note
 
 
+def parse_sec(text, day):
+    """NSE's second daily file. Returns Series symbol -> PREV_CLOSE (the value that may be
+    adjusted for corporate actions on ex-dates)."""
+    df = pd.read_csv(io.StringIO(text), skipinitialspace=True, dtype=str)
+    df.columns = [str(c).strip() for c in df.columns]
+    for c in ("SYMBOL", "SERIES", "PREV_CLOSE"):
+        if c not in df.columns:
+            raise BadFormat(f"sec_bhavdata_full: missing column {c}")
+    if "DATE1" in df.columns:
+        d = pd.to_datetime(df["DATE1"].astype(str).str.strip(), format="%d-%b-%Y",
+                           errors="coerce").dropna()
+        if len(d) and d.iloc[0].date() != day:
+            raise WrongDate(f"file says {d.iloc[0].date()}, expected {day}")
+    df["SERIES"] = df["SERIES"].astype(str).str.strip().str.upper()
+    df = df[df["SERIES"].isin(SERIES_PRIORITY)].copy()
+    df["symbol"] = df["SYMBOL"].astype(str).str.strip().str.upper()
+    df["prev"] = pd.to_numeric(df["PREV_CLOSE"].astype(str).str.strip(), errors="coerce")
+    df["prio"] = df["SERIES"].map(SERIES_PRIORITY)
+    df = df[df["prev"] > 0].sort_values("prio").drop_duplicates("symbol")
+    if df.empty:
+        raise BadFormat("sec_bhavdata_full: no usable rows")
+    return df.set_index("symbol")["prev"]
+
+
+def fetch_sec_prev(session, day):
+    """Best-effort download of the second daily file. Returns Series or None (never raises)."""
+    url = SEC_URL.format(d=day.strftime("%d%m%Y"))
+    for attempt in range(2):
+        try:
+            r = session.get(url, timeout=40)
+        except requests.RequestException:
+            time.sleep(3)
+            continue
+        if r.status_code == 200:
+            try:
+                return parse_sec(r.text, day)
+            except ValueError:
+                return None
+        if r.status_code in (403, 404):
+            return None
+        time.sleep(3)
+    return None
+
+
+class AltFetcher:
+    """Wraps fetch_sec_prev and switches itself off if NSE keeps refusing."""
+
+    def __init__(self, session):
+        self.session, self.ok, self.fail, self.off = session, 0, 0, False
+
+    def get(self, day):
+        if self.off:
+            return None
+        s = fetch_sec_prev(self.session, day)
+        if s is None:
+            self.fail += 1
+            if self.ok == 0 and self.fail >= 6:
+                self.off = True
+                print("NOTE: NSE's second daily file is not available; skipping it.")
+        else:
+            self.ok += 1
+        time.sleep(0.5)
+        return s
+
+
+def fill_adj_prev(store, alt):
+    """Add the adj_prev column for stored days that do not have it yet."""
+    dates = sorted(store["date"].unique())
+    parts = []
+    for i, d in enumerate(dates):
+        s = alt.get(pd.Timestamp(d).date())
+        if s is not None:
+            parts.append(pd.DataFrame({"date": pd.Timestamp(d), "symbol": s.index,
+                                       "adj_prev2": s.to_numpy()}))
+        if alt.off:
+            break
+        if (i + 1) % 50 == 0:
+            print(f"  filled {i + 1}/{len(dates)} days", flush=True)
+    store = store.copy()
+    if "adj_prev" not in store.columns:
+        store["adj_prev"] = np.nan
+    if parts:
+        add = pd.concat(parts, ignore_index=True)
+        store = store.merge(add, on=["date", "symbol"], how="left")
+        store["adj_prev"] = store["adj_prev"].fillna(store["adj_prev2"])
+        store = store.drop(columns=["adj_prev2"])
+    return store
+
+
 def load_store():
     if not os.path.exists(STORE):
         return None
@@ -152,6 +245,9 @@ def save_store(df, today):
     df = df[df["date"] >= cutoff]
     df = df.drop_duplicates(["date", "symbol"], keep="last")
     df = df.sort_values(["date", "symbol"])
+    if "adj_prev" not in df.columns:
+        df["adj_prev"] = np.nan
+    df = df[STORE_COLS]
     os.makedirs(os.path.dirname(STORE), exist_ok=True)
     df.to_csv(STORE, index=False, date_format="%Y-%m-%d")
     return df
@@ -163,7 +259,7 @@ def main():
     store = None if rebuild else load_store()
 
     if store is None or store.empty:
-        store = pd.DataFrame(columns=["date", "symbol", "close", "prev_close"])
+        store = pd.DataFrame(columns=STORE_COLS)
         start = today - dt.timedelta(days=BACKFILL_DAYS)
         print(f"No stored history -> backfilling from {start}")
     else:
@@ -171,11 +267,18 @@ def main():
         print(f"Stored history ends {store['date'].max().date()} -> fetching from {start}")
 
     days = [start + dt.timedelta(days=n) for n in range((today - start).days + 1)]
+    session = make_session()
+    alt = AltFetcher(session)
+
+    if len(store) and "adj_prev" not in store.columns:
+        print("Adding NSE's adjusted previous close to the stored days (one-time, slow) ...")
+        store = fill_adj_prev(store, alt)
+        store = save_store(store, today)
+
     if not days:
         print("Already up to date.")
         return 0
 
-    session = make_session()
     frames = []
     counts = {"ok": 0, "none": 0, "denied": 0, "error": 0}
     fatal = None
@@ -184,6 +287,8 @@ def main():
         status, df, note = fetch_day(session, day)
         counts[status] += 1
         if status == "ok":
+            a = alt.get(day)
+            df["adj_prev"] = df["symbol"].map(a) if a is not None else np.nan
             frames.append(df)
             print(f"{day}  ok      {len(df)} symbols", flush=True)
         elif status == "error":

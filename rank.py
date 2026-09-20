@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from adjust import raw_close_matrix, apply_events
-from events import load_manual, fetch_yahoo, build_events
+from events import load_manual, gather_events
 
 STORE = "data/prices.csv"
 OUT_CSV = "output/ranked.csv"
@@ -71,7 +71,7 @@ def write_reports(md_text, ranked_df):
             f.write(md_text)
 
 
-def main(get_splits=None):
+def main(get_splits=None, api_getter=None):
     symbols = read_symbols()
     if not os.path.exists(STORE):
         raise SystemExit(f"{STORE} not found. fetch_bhav.py must run first.")
@@ -101,23 +101,15 @@ def main(get_splits=None):
 
     # ---- corporate actions -------------------------------------------------------------
     manual = load_manual()
-    if os.environ.get("SKIP_YAHOO", "").strip() == "1":
-        yahoo, y_failed = pd.DataFrame(columns=["symbol", "date", "factor"]), {s: "skipped" for s in have}
-    else:
-        kw = {"get_splits": get_splits} if get_splits else {}
-        yahoo, y_failed = fetch_yahoo(have, since=pd.Timestamp(all_dates[0]), **kw)
-    events, rejected = build_events(raw[have], manual, yahoo)
+    events, rejected, ca_status, unverified = gather_events(
+        store, raw[have], have, manual, get_splits=get_splits, api_getter=api_getter,
+        skip_yahoo=os.environ.get("SKIP_YAHOO", "").strip() == "1",
+        skip_api=os.environ.get("SKIP_API", "").strip() == "1")
     px = apply_events(raw[have], events)
-
-    manual_syms = set(manual["symbol"])
-    unverified = [s for s in have if s in y_failed and s not in manual_syms]
-    if y_failed and len(y_failed) == len(have):
-        notes.append("WARNING: Yahoo Finance could not be reached, so bonuses/splits are applied "
-                     "only from corporate_actions.csv. Stocks with a recent bonus or split that "
-                     "is not in that file will have wrong returns.")
-    elif unverified:
+    if unverified:
         notes.append("WARNING: corporate actions could not be checked for: "
-                     + ", ".join(unverified))
+                     + ", ".join(unverified) + ". A rights issue, demerger or bonus that is not "
+                     "in corporate_actions.csv would make their returns wrong.")
 
     px = px.ffill(limit=3)
 
@@ -193,6 +185,9 @@ def main(get_splits=None):
         md.append("\n".join(f"- {n}" for n in notes) + "\n")
     md.append(md_table(ranked) + "\n")
 
+    md.append("\n## Corporate-action sources used in this run\n\n"
+              + "\n".join(f"- {line}" if not line.startswith("   ") else f"  - {line.strip()}"
+                          for line in ca_status) + "\n")
     if len(ev):
         evt = pd.DataFrame({
             "symbol": ev["symbol"],
@@ -200,9 +195,9 @@ def main(get_splits=None):
             "factor": ev["factor"].round(4),
             "source": ev["source"],
         })
-        md.append("\n## Bonus / split adjustments applied\n\n" + md_table(evt) + "\n")
+        md.append("\n## Corporate-action adjustments applied\n\n" + md_table(evt) + "\n")
     else:
-        md.append("\nNo bonus/split adjustments were needed for these stocks.\n")
+        md.append("\nNo corporate-action adjustments were needed for these stocks.\n")
     if rejected:
         rj = pd.DataFrame([(s, d.strftime("%Y-%m-%d"), round(f, 4)) for s, d, f in rejected],
                           columns=["symbol", "Yahoo date", "factor"])
@@ -216,9 +211,9 @@ def main(get_splits=None):
                   "recently:** " + ", ".join(short) + "\n")
     if bad:
         md.append("\n**Skipped: metrics could not be computed:** " + ", ".join(bad) + "\n")
-    md.append("\n*Research shortlist only, not investment advice. Returns use trading-day "
-              "counts (3m = 63, 6m = 126, 1y = 252 days), so they differ slightly from "
-              "calendar-based figures on other sites. ret_12m_ex1m skips the latest month.*\n")
+    md.append("\n*Research shortlist only, not investment advice. Returns look back 90 / 180 / "
+              "365 calendar days from today, like Screener, so small differences remain if another "
+              "site used a different day. ret_12m_ex1m skips the latest month.*\n")
 
     text = "\n".join(md)
     write_reports(text, ranked)

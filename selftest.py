@@ -10,8 +10,9 @@ import numpy as np
 import pandas as pd
 
 from adjust import raw_close_matrix, apply_events
-from events import load_manual, fetch_yahoo, align_event, build_events
-from fetch_bhav import parse_bhav, NotAZip, WrongDate, BadFormat
+from events import (load_manual, fetch_yahoo, align_event, build_events, derive_from_store,
+                    validate, fetch_api_history, events_from_api, gather_events)
+from fetch_bhav import parse_bhav, parse_sec, NotAZip, WrongDate, BadFormat
 
 
 def check(cond, msg):
@@ -112,6 +113,86 @@ def test_yahoo_handling():
     check(list(failed) == ["BAD"], "a Yahoo failure is reported per symbol, not hidden")
 
 
+
+def exchange_store(n_syms=60, n_days=80, adjusted=True, seed=2):
+    """Store with the second daily file (adj_prev). Events: 1:3 bonus, rights issue, demerger."""
+    rng = np.random.default_rng(seed)
+    dates = pd.bdate_range("2026-01-01", periods=n_days)
+    plan = {"BON": (40, 0.75), "RIGHTS": (50, 0.93), "DEMERG": (60, 0.80)}
+    names = list(plan) + [f"S{i:02d}" for i in range(n_syms)]
+    rows = []
+    for n in names:
+        p = 200 * np.exp(np.cumsum(rng.normal(0, 0.01, n_days)))
+        ev_day, f = plan.get(n, (None, 1.0))
+        for t in range(n_days):
+            nominal = p[t] / (f if (ev_day is not None and t < ev_day) else 1.0)
+            prev = (p[t - 1] / (f if (ev_day is not None and t - 1 < ev_day) else 1.0)) if t else np.nan
+            adj = prev * f if (adjusted and ev_day == t and t) else prev
+            rows.append((dates[t], n, round(nominal, 2), prev, adj))
+    return pd.DataFrame(rows, columns=["date", "symbol", "close", "prev_close", "adj_prev"]), dates
+
+
+def test_exchange_sources():
+    store, dates = exchange_store(adjusted=True)
+    ev, note = derive_from_store(store)
+    got = {(r.symbol, r.date): round(r.factor, 2) for r in ev.itertuples()}
+    check(got == {("BON", dates[40]): 0.75, ("RIGHTS", dates[50]): 0.93, ("DEMERG", dates[60]): 0.8},
+          "NSE daily file: bonus, rights issue and demerger all detected with exact factors")
+
+    manual = pd.DataFrame([("BON", dates[40], 0.75, "1:3 bonus")], columns=["symbol", "ex_date", "factor", "note"])
+    have = set(zip(store["date"], store["symbol"]))
+    ok, hits, misses = validate(ev, manual, lambda s, d: (d, s) in have)
+    check(ok and len(hits) == 1, "source that reproduces a known event is accepted")
+
+    store_u, _ = exchange_store(adjusted=False)
+    ev_u, _ = derive_from_store(store_u)
+    ok, hits, misses = validate(ev_u, manual, lambda s, d: True)
+    check(len(ev_u) == 0 and not ok, "unadjusted source is rejected")
+
+    # full pipeline: file source validated -> rights + demerger applied automatically
+    raw = raw_close_matrix(store, list(store["symbol"].unique()))
+    events, rej, status, unver = gather_events(store, raw, ["BON", "RIGHTS", "DEMERG", "S00"], manual,
+                                               skip_yahoo=True, skip_api=True)
+    check(set(events["symbol"]) == {"BON", "RIGHTS", "DEMERG"} and not unver,
+          "gather_events applies rights issue and demerger automatically")
+    px = apply_events(raw[["RIGHTS"]], events)
+    r = px["RIGHTS"].pct_change().abs().max()
+    check(r < 0.06, f"rights-issue day no longer shows a fake drop (max 1-day move {r:.1%})")
+
+    # file source unadjusted -> API source (fake) is validated and used
+    def getter(sym, a, b):
+        g = store[(store["symbol"] == sym) & (store["date"] >= pd.Timestamp(a)) & (store["date"] <= pd.Timestamp(b))]
+        return [{"CH_TIMESTAMP": r.date.strftime("%Y-%m-%d"), "CH_PREVIOUS_CLS_PRICE": r.adj_prev,
+                 "CH_CLOSING_PRICE": r.close} for r in g.itertuples() if not pd.isna(r.adj_prev)]
+    store_x = store.copy()
+    store_x["adj_prev"] = store_x["prev_close"]                     # daily file unadjusted
+    events, rej, status, unver = gather_events(store_x, raw, ["BON", "RIGHTS", "S00"], manual,
+                                               api_getter=getter, skip_yahoo=True)
+    check("RIGHTS" in set(events["symbol"]) and any("website API: VALIDATED" in l for l in status),
+          "NSE website API is used when the daily file is unadjusted")
+
+    # both refused -> falls back, reports unverified
+    def refused(sym, a, b):
+        raise ConnectionError("HTTP 403")
+    events, rej, status, unver = gather_events(store_x, raw, ["BON", "S00"], manual,
+                                               api_getter=refused, skip_yahoo=True)
+    check(unver == ["S00"] and list(events["symbol"]) == ["BON"],
+          "when no source works, stocks are reported as unverified")
+
+
+def test_parse_sec():
+    text = ("SYMBOL, SERIES, DATE1, PREV_CLOSE, CLOSE_PRICE\n"
+            "AAA, EQ, 05-Jan-2026, 99.5, 100\nBBB, BE, 05-Jan-2026, 50, 51\nCCC, N1, 05-Jan-2026, 5, 5\n")
+    s = parse_sec(text, dt.date(2026, 1, 5))
+    check(sorted(s.index) == ["AAA", "BBB"] and s["AAA"] == 99.5, "second daily file is parsed")
+    try:
+        parse_sec(text, dt.date(2026, 1, 6))
+    except WrongDate:
+        print("ok  - second daily file with the wrong date is rejected")
+    else:
+        check(False, "second daily file with the wrong date is rejected")
+
+
 def make_zip(rows, header=None, name="bhav.csv"):
     header = header or ["TradDt", "TckrSymb", "SctySrs", "ClsPric", "PrvsClsgPric"]
     text = ",".join(header) + "\n" + "\n".join(",".join(map(str, r)) for r in rows)
@@ -152,5 +233,7 @@ if __name__ == "__main__":
     test_alignment()
     test_manual_file()
     test_yahoo_handling()
+    test_exchange_sources()
+    test_parse_sec()
     test_parser()
     print("ALL SELFTESTS PASSED")
