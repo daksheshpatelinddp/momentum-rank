@@ -17,6 +17,7 @@ from events import load_manual, gather_events, estimate_factor
 
 STORE = "data/prices.csv"
 BSE_STORE = "data/prices_bse.csv"
+BSE_IDS = "data/bse_ids.csv"
 OUT_CSV = "output/ranked.csv"
 OUT_MD = "output/ranked.md"
 # Look-backs are calendar days, like Screener / Chartink: 3m = 90, 6m = 180, 1y = 365 days.
@@ -72,7 +73,7 @@ def write_reports(md_text, ranked_df):
             f.write(md_text)
 
 
-def main(get_splits=None, api_getter=None):
+def main(get_splits=None, api_getter=None, announce_getters=None):
     symbols = read_symbols()
     if not os.path.exists(STORE):
         raise SystemExit(f"{STORE} not found. fetch_bhav.py must run first.")
@@ -89,7 +90,7 @@ def main(get_splits=None, api_getter=None):
     if age > 6:
         notes.append(f"WARNING: latest price data is {age} days old ({as_of.date()}).")
 
-    bse, bse_syms, tickers = None, [], {}
+    bse, bse_syms, tickers, bse_codes = None, [], {}, {}
     if os.path.exists(BSE_STORE):
         bse = pd.read_csv(BSE_STORE, parse_dates=["date"], dtype={"code": str})
         if len(bse):                                   # numeric scrip codes -> BSE Security IDs
@@ -102,6 +103,7 @@ def main(get_splits=None, api_getter=None):
         bse_syms = list(rb.columns)
         raw = raw.join(rb, how="outer")
         codes = bse.drop_duplicates("symbol", keep="last").set_index("symbol")["code"]
+        bse_codes = {k: str(v) for k, v in codes.items()}
         tickers = {s: (f"{codes[s]}.BO" if str(codes.get(s, "")).strip() not in ("", "nan")
                        else f"{s}.BO") for s in bse_syms}
     ref = max(pd.Timestamp(today), as_of)          # reference date for the look-backs
@@ -116,11 +118,16 @@ def main(get_splits=None, api_getter=None):
 
     # ---- corporate actions -------------------------------------------------------------
     manual = load_manual()
+    bse_ids = set()
+    if os.path.exists(BSE_IDS):
+        bse_ids = set(pd.read_csv(BSE_IDS, dtype=str)["symbol"].dropna())
     events, rejected, ca_status, unverified, mm = gather_events(
         store, raw[have], have, manual, get_splits=get_splits, api_getter=api_getter,
         skip_yahoo=os.environ.get("SKIP_YAHOO", "").strip() == "1",
         skip_api=os.environ.get("SKIP_API", "").strip() == "1",
-        bse=bse, bse_symbols=bse_syms, calendar=all_dates, yahoo_tickers=tickers)
+        bse=bse, bse_symbols=bse_syms, calendar=all_dates, yahoo_tickers=tickers,
+        skip_announce=os.environ.get("SKIP_ANNOUNCE", "").strip() == "1",
+        announce_getters=announce_getters, bse_ids=bse_ids)
     px = apply_events(raw[have], events)
     # BSE stocks can trade only on some days: carry the last traded price forward, but only
     # for stocks that traded within the last 30 days.
@@ -231,6 +238,7 @@ def main(get_splits=None, api_getter=None):
             "ex-date": ev["date"].dt.strftime("%Y-%m-%d"),
             "factor": ev["factor"].round(4),
             "source": ev["source"],
+            "announcement / note": ev["note"].fillna("").astype(str),
         })
         md.append("\n## Corporate-action adjustments applied\n\n" + md_table(evt) + "\n")
     else:

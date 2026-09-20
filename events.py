@@ -2,6 +2,9 @@
 
 Sources, in order of trust:
   1. corporate_actions.csv  - your own list; always trusted, always wins
+  1b. Exchange ANNOUNCEMENTS (BSE, and NSE if reachable): ex-date + purpose text of every
+      bonus, split, consolidation, spin-off, demerger. Used only after it reproduces your
+      known events. Bonus/split ratios give exact factors.
   2. NSE's own adjusted previous close (bonus, split, rights, demerger, spin-off, anything):
        a. the second daily file (sec_bhavdata_full), stored by fetch_bhav.py as adj_prev
        b. NSE's website history API
@@ -10,6 +13,7 @@ Sources, in order of trust:
 Stocks that no source could check are reported as "unverified".
 """
 import os
+import re
 import time
 from urllib.parse import quote
 
@@ -169,7 +173,7 @@ def build_events(raw_px, manual, yahoo, exchange=None, dedupe_days=3, market_mov
                 continue
             if _near_existing(out, r.symbol, r.date, dedupe_days):
                 continue
-            out.append((r.symbol, r.date, float(r.factor), r.source, ""))
+            out.append((r.symbol, r.date, float(r.factor), r.source, getattr(r, "note", "") or ""))
 
     trusted = list(out)
     for r in yahoo.itertuples(index=False):
@@ -323,7 +327,8 @@ def validate(found, manual, checkable):
     return passed, hits, misses
 
 
-def _describe(name, passed, hits, misses):
+def _describe(name, passed, hits, misses,
+              why="its previous close is not adjusted for corporate actions"):
     total = len(hits) + len(misses)
     lines = []
     if passed:
@@ -331,7 +336,7 @@ def _describe(name, passed, hits, misses):
                      "so it is used for every bonus, split, rights issue and demerger.")
     else:
         lines.append(f"{name}: NOT used - it reproduced only {len(hits)} of {total} known events "
-                     "(its previous close is not adjusted for corporate actions).")
+                     f"({why}).")
     for sym, d, f, seen in misses:
         lines.append(f"   expected {sym} {d} factor {f}, source showed {seen or 'no change'}")
     return lines
@@ -408,7 +413,8 @@ def derive_from_bse(bse, calendar):
 
 def gather_events(store, raw_px, symbols, manual, get_splits=None, api_getter=None,
                   skip_yahoo=False, skip_api=False, bse=None, bse_symbols=(),
-                  calendar=None, yahoo_tickers=None):
+                  calendar=None, yahoo_tickers=None, skip_announce=False,
+                  announce_getters=None, bse_ids=()):
     """Return (events, rejected_yahoo, status_lines, unverified_symbols, market_move).
 
     `store` is the NSE price store. Stocks in `bse_symbols` come from the BSE store `bse`."""
@@ -420,6 +426,8 @@ def gather_events(store, raw_px, symbols, manual, get_splits=None, api_getter=No
     nse_have = [s for s in have if s not in bse_set]
     bse_have = [s for s in have if s in bse_set]
     a_passed = False
+    ok_rows = store[(store["prev_close"] > 0) & (store["close"] > 0)]
+    mm = (ok_rows["close"] / ok_rows["prev_close"] - 1).groupby(pd.to_datetime(ok_rows["date"])).median()
 
     # (a) NSE second daily file, stored by fetch_bhav.py
     evA, noteA = derive_from_store(store)
@@ -482,6 +490,44 @@ def gather_events(store, raw_px, symbols, manual, get_splits=None, api_getter=No
     if bse_have:
         status.append("Prices for " + ", ".join(bse_have) + " come from BSE.")
 
+    # (e) Corporate-action ANNOUNCEMENTS from NSE and BSE (official ex-dates and ratios)
+    ann_unresolved = []
+    if not skip_announce:
+        from announce import fetch_bse_actions, fetch_nse_actions, resolve_actions
+        from adjust import raw_close_matrix
+        getters = announce_getters or {}
+        first, last = pd.Timestamp(raw_px.index.min()), pd.Timestamp(raw_px.index.max())
+        px_all = raw_px[have].copy()
+        extra = [x for x in manual["symbol"].unique() if x not in px_all.columns]
+        if extra:                                    # prices of your known events, to check announcements
+            ex_px = raw_close_matrix(store, extra)
+            miss = [x for x in extra if x not in ex_px.columns]
+            if miss and bse is not None and len(bse):
+                ex_px = ex_px.join(raw_close_matrix(bse, miss), how="outer")
+            px_all = px_all.join(ex_px.reindex(px_all.index))
+        code_to_sym = {}
+        if bse is not None and len(bse):
+            code_to_sym = bse.drop_duplicates("code", keep="last").set_index("code")["symbol"].astype(str).to_dict()
+        known_bse = set(bse_ids) | bse_set
+        for name, fetcher in (("NSE", fetch_nse_actions), ("BSE", fetch_bse_actions)):
+            acts, note = fetcher(first, last, get=getters.get(name))
+            if acts.empty:
+                status.append(f"{name} announcements: not usable - {note}.")
+                continue
+            evx, unres = resolve_actions(acts, px_all, mm, code_to_sym)
+            checkable = lambda x, d: x in px_all.columns and first < d <= last
+            passed, hits, misses = validate(evx, manual, checkable)
+            if hits or misses:
+                status += _describe(f"{name} announcements", passed, hits, misses,
+                                    why="the announcements did not match your known events")
+            else:
+                status.append(f"{name} announcements: cannot be validated (none of your known "
+                              "events could be checked) - not used.")
+            if passed:
+                exchange_parts.append(evx[evx["symbol"].isin(have)])
+                covered |= set(nse_have) if name == "NSE" else {x for x in have if x in known_bse}
+                ann_unresolved += [u for u in unres if u[0] in have]
+
     exchange = pd.concat(exchange_parts, ignore_index=True) if exchange_parts else None
 
     # (c) Yahoo for whatever the exchange sources did not cover
@@ -498,8 +544,6 @@ def gather_events(store, raw_px, symbols, manual, get_splits=None, api_getter=No
     elif rest:
         y_failed = {s: "skipped" for s in rest}
 
-    ok_rows = store[(store["prev_close"] > 0) & (store["close"] > 0)]
-    mm = (ok_rows["close"] / ok_rows["prev_close"] - 1).groupby(pd.to_datetime(ok_rows["date"])).median()
     events, rejected = build_events(raw_px[have], manual, yahoo, exchange, market_move=mm)
     auto = detect_price_events(raw_px[have], events, mm)
     if len(auto):
@@ -512,4 +556,9 @@ def gather_events(store, raw_px, symbols, manual, get_splits=None, api_getter=No
                       + ", ".join(f"{r.symbol} {r.date.date()} ({r.factor})" for r in auto.itertuples()) + ".")
     manual_syms = set(manual["symbol"])
     unverified = [s for s in rest if s in y_failed and s not in manual_syms]
+    for sym, d, text, why in ann_unresolved:
+        status.append(f"Announced but NOT adjusted: {sym} {pd.Timestamp(d).date()} '{text}' ({why}). "
+                      "Add the exact factor to corporate_actions.csv.")
+        if sym not in unverified:
+            unverified.append(sym)
     return events, rejected, status, unverified, mm

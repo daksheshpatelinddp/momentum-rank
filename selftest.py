@@ -13,6 +13,7 @@ from adjust import raw_close_matrix, apply_events
 from events import (load_manual, fetch_yahoo, align_event, build_events, derive_from_store,
                     validate, fetch_api_history, events_from_api, gather_events,
                     derive_from_bse, detect_price_events)
+from announce import parse_purpose, resolve_actions, fetch_bse_actions, fetch_nse_actions
 from fetch_bhav import parse_bhav, parse_sec, NotAZip, WrongDate, BadFormat
 from fetch_bse import parse_bse
 
@@ -171,7 +172,7 @@ def test_exchange_sources():
     # full pipeline: file source validated -> rights + demerger applied automatically
     raw = raw_close_matrix(store, list(store["symbol"].unique()))
     events, rej, status, unver, _mm = gather_events(store, raw, ["BON", "RIGHTS", "DEMERG", "S00"], manual,
-                                               skip_yahoo=True, skip_api=True)
+                                               skip_yahoo=True, skip_api=True, skip_announce=True)
     check(set(events["symbol"]) == {"BON", "RIGHTS", "DEMERG"} and not unver,
           "gather_events applies rights issue and demerger automatically")
     px = apply_events(raw[["RIGHTS"]], events)
@@ -186,7 +187,7 @@ def test_exchange_sources():
     store_x = store.copy()
     store_x["adj_prev"] = store_x["prev_close"]                     # daily file unadjusted
     events, rej, status, unver, _mm = gather_events(store_x, raw, ["BON", "RIGHTS", "S00"], manual,
-                                               api_getter=getter, skip_yahoo=True)
+                                               api_getter=getter, skip_yahoo=True, skip_announce=True)
     check("RIGHTS" in set(events["symbol"]) and any("website API: VALIDATED" in l for l in status),
           "NSE website API is used when the daily file is unadjusted")
 
@@ -194,7 +195,7 @@ def test_exchange_sources():
     def refused(sym, a, b):
         raise ConnectionError("HTTP 403")
     events, rej, status, unver, _mm = gather_events(store_x, raw, ["BON", "S00"], manual,
-                                               api_getter=refused, skip_yahoo=True)
+                                               api_getter=refused, skip_yahoo=True, skip_announce=True)
     check(unver == ["S00"] and list(events["symbol"]) == ["BON"],
           "when no source works, stocks are reported as unverified")
 
@@ -277,6 +278,92 @@ def test_auto_detection():
     check((px["SPLIT"].pct_change().abs().max()) < 0.06, "after the automatic adjustment the split day shows no fake drop")
 
 
+def test_announcements():
+    cases = [
+        ("Bonus issue 1:3", None, "bonus", 0.75),
+        ("Bonus 1:1", None, "bonus", 0.5),
+        ("Stock Split From Rs.10/- To Rs.1/-", None, "split", 0.1),
+        ("Face Value Split (Sub-Division) - From Rs 10/- Per Share To Rs 2/- Per Share", None, "split", 0.2),
+        ("Sub-division of equity shares of Rs.10/- each into 10 equity shares of Rs.1/- each", None, "split", 0.1),
+        ("Consolidation from Rs.1/- to Rs.10/-", None, "split", 10.0),
+        ("Spin Off", None, "estimate", None),
+        ("Final Dividend - Rs. - 1.2500", None, None, None),
+        ("Bonus issue of debentures 1:10", None, None, None),
+    ]
+    for text, face, kind, factor in cases:
+        p = parse_purpose(text, face)
+        ok = p["kind"] == kind and (factor is None or abs(p["factor"] - factor) < 1e-9)
+        check(ok, f"announcement text read correctly: {text[:48]}")
+    r = parse_purpose("Rights 1:5 @ Premium Rs 30/-", 10)
+    check(r["kind"] == "rights" and r["issue"] == 40.0 and r["ratio"] == (1, 5), "rights text: ratio and issue price (face value + premium)")
+
+    idx = pd.bdate_range("2026-03-02", periods=40)
+    price = pd.Series(100.0, index=idx)
+    price.iloc[20:] = 75.0                                   # 1:3 bonus on day 20
+    raw_px = pd.DataFrame({"AAA": price, "RGT": 100.0, "SPIN": 100.0}, index=idx)
+    raw_px.loc[idx[25]:, "SPIN"] = 60.0                      # spin-off, day 25
+    acts = pd.DataFrame([
+        ("BSE", "AAA", "1", idx[20], "Bonus issue 1:3", np.nan),
+        ("BSE", "RGT", "2", idx[10], "Rights 1:5 @ Premium Rs 30/-", 10.0),
+        ("BSE", "RGT", "2", idx[12], "Rights 1:5 @ Premium Rs 30/-", np.nan),
+        ("BSE", "SPIN", "3", idx[25], "Spin Off", np.nan),
+        ("BSE", "AAA", "1", idx[30], "Final Dividend - Rs. - 2", np.nan),
+    ], columns=["source", "symbol", "code", "ex_date", "purpose", "face"])
+    ev, unres = resolve_actions(acts, raw_px, None)
+    got = {(r.symbol, r.date): r.factor for r in ev.itertuples()}
+    check(abs(got[("AAA", idx[20])] - 0.75) < 1e-9, "bonus announcement gives factor 0.75 on the ex-date")
+    check(abs(got[("RGT", idx[10])] - (5 + 1 * 40 / 100) / 6) < 1e-3, "rights issue factor from theoretical ex-rights price")
+    check(abs(got[("SPIN", idx[25])] - 0.6) < 1e-3, "spin-off: official date, factor estimated from the price move")
+    check(len(unres) == 1 and unres[0][0] == "RGT", "rights issue without an issue price is reported, not guessed")
+
+    # download functions: windows, JSON shapes, failures
+    def bse_get(a, b):
+        return {"Table": [{"scrip_code": 532356, "short_name": "trivenI", "Ex_date": "22 Jul 2026",
+                           "Purpose": "Spin Off"}]} if a <= dt.date(2026, 7, 22) <= b else []
+    df, note = fetch_bse_actions(pd.Timestamp("2026-06-01"), pd.Timestamp("2026-08-31"), get=bse_get, pause=0)
+    check(len(df) == 1 and df.iloc[0]["symbol"] == "TRIVENI" and df.iloc[0]["ex_date"] == pd.Timestamp("2026-07-22"),
+          "BSE announcements: rows read from the JSON answer")
+    def nse_get(a, b):
+        return [{"symbol": "GOLDIAM", "subject": "Bonus 1:3", "exDate": "10-Jul-2026", "faceVal": "10"}]
+    df, note = fetch_nse_actions(pd.Timestamp("2026-06-01"), pd.Timestamp("2026-08-31"), get=nse_get, pause=0)
+    check(len(df) >= 1 and df.iloc[0]["face"] == 10.0 and df.iloc[0]["ex_date"] == pd.Timestamp("2026-07-10"),
+          "NSE announcements: rows and face value read")
+    def odd(a, b):
+        return [{"foo": "x", "bar": "y"}]
+    df, note = fetch_bse_actions(pd.Timestamp("2026-06-01"), pd.Timestamp("2026-06-20"), get=odd, pause=0)
+    check(df.empty and "field names seen" in note and "foo" in note,
+          "unreadable announcement fields are reported with the field names seen")
+
+    def blocked(a, b):
+        raise ValueError("Expecting value: line 1 column 1")
+    df, note = fetch_bse_actions(pd.Timestamp("2026-06-01"), pd.Timestamp("2026-08-31"), get=blocked, pause=0)
+    check(df.empty and "ValueError" in note, "a blocked or non-JSON answer is reported as not usable")
+
+    # full check: validated only when the announcements reproduce YOUR known events
+    store, dates = exchange_store(adjusted=False)
+    raw = raw_close_matrix(store, list(store["symbol"].unique()))
+    manual = pd.DataFrame([("BON", dates[40], 0.75, "1:3 bonus")], columns=["symbol", "ex_date", "factor", "note"])
+    good = lambda a, b: [{"scrip_code": 1, "short_name": "BON", "Ex_date": dates[40].strftime("%d %b %Y"),
+                          "Purpose": "Bonus issue 1:3"},
+                         {"scrip_code": 2, "short_name": "RIGHTS", "Ex_date": dates[50].strftime("%d %b %Y"),
+                          "Purpose": "Spin Off"}]
+    wrong = lambda a, b: [{"scrip_code": 1, "short_name": "BON", "Ex_date": dates[41].strftime("%d %b %Y"),
+                           "Purpose": "Bonus issue 1:2"}]
+    def refuse(a, b):
+        raise ConnectionError("HTTP 403")
+    events, rej, status, unver, _mm = gather_events(store, raw, ["BON", "RIGHTS", "S00"], manual,
+                                                    skip_yahoo=True, skip_api=True,
+                                                    announce_getters={"BSE": good, "NSE": refuse},
+                                                    bse_ids={"BON", "RIGHTS", "S00"})
+    check(any("BSE announcements: VALIDATED" in l for l in status) and "RIGHTS" in set(events["symbol"]) and not unver,
+          "announcements that match your known events are used, and cover the stock")
+    events, rej, status, unver, _mm = gather_events(store, raw, ["BON", "S00"], manual, skip_yahoo=True,
+                                                    skip_api=True, announce_getters={"BSE": wrong, "NSE": refuse},
+                                                    bse_ids={"BON", "S00"})
+    check(any("BSE announcements: NOT used" in l for l in status),
+          "announcements that contradict your known events are rejected")
+
+
 def make_zip(rows, header=None, name="bhav.csv"):
     header = header or ["TradDt", "TckrSymb", "SctySrs", "ClsPric", "PrvsClsgPric"]
     text = ",".join(header) + "\n" + "\n".join(",".join(map(str, r)) for r in rows)
@@ -322,5 +409,6 @@ if __name__ == "__main__":
     test_parse_sec()
     test_bse()
     test_auto_detection()
+    test_announcements()
     test_parser()
     print("ALL SELFTESTS PASSED")

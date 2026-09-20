@@ -29,6 +29,7 @@ URL = ("https://www.bseindia.com/download/BhavCopy/Equity/"
 NSE_STORE = "data/prices.csv"
 STORE = "data/prices_bse.csv"
 META = "data/bse_meta.json"
+IDS = "data/bse_ids.csv"
 BACKFILL_DAYS = 460
 KEEP_DAYS = 500
 STORE_COLS = ["date", "symbol", "code", "close", "prev_close"]
@@ -124,9 +125,33 @@ def save_store(df, today):
     return df
 
 
+def refresh_ids(session, today):
+    """Save every BSE Security ID and scrip code (small file, refreshed on each run). It tells
+    the ranking which stocks BSE's corporate-action announcements can cover."""
+    day = today
+    for _ in range(8):
+        if day.weekday() < 5:
+            status, df, note = fetch_day(session, day, url_tmpl=URL,
+                                         parser=lambda c, d: parse_bse(c, d, drop_unpriced=False),
+                                         retry_sleep=2)
+            if status == "ok":
+                os.makedirs("data", exist_ok=True)
+                df[["symbol", "code"]].drop_duplicates().to_csv(IDS, index=False)
+                print(f"Saved {IDS}: {len(df)} BSE stocks")
+                return
+        day -= dt.timedelta(days=1)
+    print("NOTE: could not refresh the BSE id list.")
+
+
 def main():
     today = dt.datetime.now(ZoneInfo("Asia/Kolkata")).date()
     tokens = read_symbols()
+    try:
+        refresh_ids(make_session(), today)
+    except SystemExit:
+        pass
+    except Exception as e:                       # never let this stop the main job
+        print("NOTE: BSE id list not refreshed:", type(e).__name__)
     nse = set()
     if os.path.exists(NSE_STORE):
         nse = set(pd.read_csv(NSE_STORE, usecols=["symbol"])["symbol"].unique())
