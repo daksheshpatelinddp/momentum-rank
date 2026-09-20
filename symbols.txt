@@ -3,7 +3,7 @@
 # Replace the sample lines below with your own list.
 INDRADIA
 TEAMLEASE
-JBCHEMPHARMA
+JBCHEPHARM
 HDFCBANK
 MINOLTAF
 PAYTM
