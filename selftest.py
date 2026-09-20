@@ -286,6 +286,8 @@ def test_announcements():
         ("Face Value Split (Sub-Division) - From Rs 10/- Per Share To Rs 2/- Per Share", None, "split", 0.2),
         ("Sub-division of equity shares of Rs.10/- each into 10 equity shares of Rs.1/- each", None, "split", 0.1),
         ("Consolidation from Rs.1/- to Rs.10/-", None, "split", 10.0),
+        ("Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share", None, "split", 0.1),
+        ("Bonus 5:1", None, "bonus", 1 / 6),
         ("Spin Off", None, "estimate", None),
         ("Final Dividend - Rs. - 1.2500", None, None, None),
         ("Bonus issue of debentures 1:10", None, None, None),

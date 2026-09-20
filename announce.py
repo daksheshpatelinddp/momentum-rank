@@ -26,7 +26,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # Reading the announcement text
 # ---------------------------------------------------------------------------------------
 _NUM = r"(\d+(?:\.\d+)?)"
-_RS = r"(?:rs\.?|inr)?\s*"
+_RS = r"(?:rs\.?|re\.?|inr)?\s*"
 
 
 def parse_purpose(text, face=None):
@@ -54,7 +54,7 @@ def parse_purpose(text, face=None):
                             "consolidation", "consolidated")):
         m = re.search(r"from\s*" + _RS + _NUM + r"\D+?to\s*" + _RS + _NUM, t)
         if not m:
-            m = re.search(r"(?:rs\.?|inr)\s*" + _NUM + r"\D*?each\D*?into.*?(?:rs\.?|inr)\s*" + _NUM, t)
+            m = re.search(r"(?:rs\.?|re\.?|inr)\s*" + _NUM + r"\D*?each\D*?into.*?(?:rs\.?|re\.?|inr)\s*" + _NUM, t)
         if m:
             old, new = float(m.group(1)), float(m.group(2))
             if old > 0 and new > 0 and old != new:

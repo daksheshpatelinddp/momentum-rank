@@ -557,6 +557,10 @@ def gather_events(store, raw_px, symbols, manual, get_splits=None, api_getter=No
     manual_syms = set(manual["symbol"])
     unverified = [s for s in rest if s in y_failed and s not in manual_syms]
     for sym, d, text, why in ann_unresolved:
+        # skip if another source (e.g. the BSE list) already gave this event a factor
+        if len(events) and ((events["symbol"] == sym)
+                            & ((events["date"] - pd.Timestamp(d)).abs() <= pd.Timedelta(days=5))).any():
+            continue
         status.append(f"Announced but NOT adjusted: {sym} {pd.Timestamp(d).date()} '{text}' ({why}). "
                       "Add the exact factor to corporate_actions.csv.")
         if sym not in unverified:
