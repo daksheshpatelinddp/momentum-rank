@@ -10,6 +10,7 @@
   "INRADIA",
   "JBCHEMPHARMA",
   "KEDIACN",
+  "KFINTEC",
   "MINOLTAF",
   "MRSS",
   "TRIVENI"
@@ -19,6 +20,7 @@
   "MRSS": "absent",
   "539229": "absent",
   "KEDIACN": "absent",
-  "508993": "absent"
+  "508993": "absent",
+  "KFINTEC": "absent"
  }
 }
