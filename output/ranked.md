@@ -1,6 +1,6 @@
 # Momentum ranking (data up to 2026-09-18)
 
-Ranked **15** of 20 symbols. Score is 0-100 (percentile-based, relative to this list only).
+Ranked **15** of 22 symbols. Score is 0-100 (percentile-based, relative to this list only).
 
 - WARNING: corporate actions could not be checked for: INRADIA, JBCHEPHARM, MINOLTAF, GUJINJEC. A rights issue, demerger or bonus that is not in corporate_actions.csv would make their returns wrong.
 
@@ -62,7 +62,7 @@ These stocks fell sharply in one day. If the announcement shows a spin-off, deme
 | GUJINJEC | 2026-07-08 | -89.7 | 0.1049 | GUJINJEC,2026-07-08,auto,check announcement |
 
 
-**Not found in NSE or BSE data** (typo, renamed, SME or not listed): MRSS, KEDIACN
+**Not found in NSE or BSE data** (typo, renamed, SME or not listed): MRSS, 539229, KEDIACN, 508993
 
 
 **Skipped: less than about 12 months of history or not trading recently:** INRADIA, JBCHEPHARM, GUJENERGY
