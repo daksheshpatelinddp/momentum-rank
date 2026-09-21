@@ -1,0 +1,80 @@
+name: Multi-scenario backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      history_start:
+        description: "Earliest date for NSE price history (YYYY-MM-DD). Only needed once; later runs resume."
+        default: "2013-01-01"
+      refresh_indices:
+        description: "Re-download the Nifty index lists (nifty50/100/200/500/midcap100/smallcap100) even if already present"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: momentum-backtest2
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packages
+        run: pip install -r requirements.txt
+
+      - name: Self-test (offline)
+        run: python selftest.py
+
+      - name: Download index constituent lists
+        run: |
+          python -c "
+          import universe, json
+          force = '${{ inputs.refresh_indices }}'.strip().lower() == 'true'
+          print(json.dumps(universe.fetch_index_lists(force=force), indent=1))
+          "
+
+      - name: Download / continue NSE price history
+        env:
+          HISTORY_START: ${{ inputs.history_start }}
+        run: python fetch_history.py
+
+      - name: Save history progress
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/history.csv universe/ 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Nothing to commit"
+          else
+            git commit -m "Update backtest price history"
+            git pull --rebase --autostash
+            git push
+          fi
+
+      - name: Run scenarios
+        run: python backtest2.py
+
+      - name: Save results
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A output
+          if git diff --cached --quiet; then
+            echo "Nothing to commit"
+          else
+            git commit -m "Update backtest scenario results"
+            git pull --rebase --autostash
+            git push
+          fi
