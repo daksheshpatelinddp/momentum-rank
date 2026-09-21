@@ -16,6 +16,9 @@ from events import (load_manual, fetch_yahoo, align_event, build_events, derive_
 from announce import parse_purpose, resolve_actions, fetch_bse_actions, fetch_nse_actions
 from fetch_bhav import parse_bhav, parse_sec, NotAZip, WrongDate, BadFormat
 from fetch_bse import parse_bse
+import backtest as bt
+import backtest2 as bt2
+import universe as uv
 
 
 def check(cond, msg):
@@ -366,6 +369,67 @@ def test_announcements():
           "announcements that contradict your known events are rejected")
 
 
+def test_backtest():
+    rng = np.random.default_rng(3)
+    dates = pd.bdate_range("2018-01-01", "2022-12-31")
+    n = 60
+    rates = np.linspace(0.0001, 0.0018, n)                  # stock 59 is the best, ordering is stable
+    r = rates + rng.normal(0, 2e-4, (len(dates), n))
+    P = pd.DataFrame(100 * np.cumprod(1 + r, axis=0), index=dates, columns=[f"S{i:02d}" for i in range(n)])
+    ranks = bt.compute_ranks(P, None, 0)
+    check(ranks.iloc[-1].idxmin() == "S59", "backtest: the fastest riser gets rank 1")
+    res = bt.simulate(P, ranks, n=20, entry=20, exit_=40, cost_bps=0, cash_rate=0.0)
+    top = [f"S{i:02d}" for i in range(40, 60)]
+    exp = 100 * (P.loc[res["equity"].index[-1], top] / P.loc[res["equity"].index[0], top]).mean()
+    check(abs(res["equity"].iloc[-1] / exp - 1) < 1e-6, "backtest: result equals buy-and-hold of the top 20 (known answer)")
+    res2 = bt.simulate(P, ranks, n=20, entry=20, exit_=40, cost_bps=30, cash_rate=0.0)
+    check(abs(res2["equity"].iloc[-1] / (exp * 0.997) - 1) < 1e-4, "backtest: trading cost is charged once per buy")
+    t = ranks.index[30]
+    P2 = P.copy()
+    fut = P2.index > t
+    P2.loc[fut] = P2.loc[fut] * np.random.default_rng(1).uniform(0.5, 1.5, P2.loc[fut].shape)
+    check(bt.compute_ranks(P2, None, 0).loc[t].equals(ranks.loc[t]), "backtest: ranks use no future data")
+
+
+def test_universe_and_backtest2():
+    import tempfile
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            os.makedirs("universe")
+            open("universe/nifty50.txt", "w").write("AAA\nBBB\nCCC\n")
+            check(uv.load_index("nifty50") == ["AAA", "BBB", "CCC"], "universe: index list file is read")
+            try:
+                uv.load_index("doesnotexist")
+            except SystemExit:
+                print("ok  - universe: missing index file gives a clear error")
+            else:
+                check(False, "universe: missing index file gives a clear error")
+
+            open("universe/marketcap.csv", "w").write("symbol,marketcap_cr\nAAA,2000\nBBB,8000\nCCC,50000\n")
+            got = uv.resolve("marketcap", 1000, 10000)
+            check(sorted(got) == ["AAA", "BBB"], "universe: marketcap band filters correctly")
+
+            rng = np.random.default_rng(5)
+            dates = pd.bdate_range("2020-01-01", periods=600)
+            rates = np.linspace(0.0002, 0.0018, 20)
+            P = pd.DataFrame(100 * np.exp(np.cumsum(rates + rng.normal(0, 0.015, (600, 20)), axis=0)),
+                             index=dates, columns=[f"S{i:02d}" for i in range(20)])
+            ranks = bt2.compute_ranks(P, bt2.DEFAULT_WEIGHTS, list(P.columns), min_turnover_cr=0)
+            check(ranks.iloc[-1].idxmin() == "S19", "backtest2: fastest riser ranks first (own compute_ranks)")
+
+            gate = pd.Series(False, index=ranks.index)          # index filter always closed
+            res = bt2.simulate(P, ranks, n=5, entry=5, exit_=10, cost_bps=0, buy_gate=gate)
+            check(len(res["trades"]) == 0, "backtest2: buy_gate closed for the whole run makes zero trades")
+
+            gate2 = pd.Series(True, index=ranks.index)
+            res2 = bt2.simulate(P, ranks, n=5, entry=5, exit_=10, cost_bps=0, buy_gate=gate2)
+            check(len(res2["trades"]) > 0, "backtest2: buy_gate open lets trades happen")
+        finally:
+            os.chdir(cwd)
+
+
 def make_zip(rows, header=None, name="bhav.csv"):
     header = header or ["TradDt", "TckrSymb", "SctySrs", "ClsPric", "PrvsClsgPric"]
     text = ",".join(header) + "\n" + "\n".join(",".join(map(str, r)) for r in rows)
@@ -411,6 +475,8 @@ if __name__ == "__main__":
     test_parse_sec()
     test_bse()
     test_auto_detection()
+    test_backtest()
+    test_universe_and_backtest2()
     test_announcements()
     test_parser()
     print("ALL SELFTESTS PASSED")

@@ -1,0 +1,25 @@
+# One row = one backtest. Edit freely, add or remove rows, then run the workflow.
+# Blank cells use the default shown in the column name.
+#
+# universe            : nifty50 | nifty100 | nifty200 | nifty500 | niftymidcap100 |
+#                        niftysmallcap100 | marketcap  (marketcap uses min/max_marketcap_cr
+#                        and universe/marketcap.csv)
+# entry                : buy only stocks ranked this well or better
+# exit                 : sell when the rank is worse than this
+# n [default = entry]  : max number of holdings
+# step [1]             : rebalance every N months
+# cost_bps [30]        : cost per buy/sell, basis points
+# min_turnover_cr [5]  : minimum median daily traded value, Rs crore
+# w_r3,w_r6vol,w_r12_1,w_nearhigh [0.25,0.30,0.25,0.20] : score weights, need not sum to 1
+# stock_sma200 [no]    : yes = only buy/hold a stock while its close is above its own 200-day SMA
+# index_sma200 [no]    : yes = only buy while the reference index is above its 200-day SMA
+# index [nifty50]      : which index to use for index_sma200 (nifty50 or nifty500)
+
+name,universe,min_marketcap_cr,max_marketcap_cr,entry,exit,n,step,cost_bps,min_turnover_cr,w_r3,w_r6vol,w_r12_1,w_nearhigh,stock_sma200,index_sma200,index
+n500_top20_exit40,nifty500,,,20,40,20,1,30,5,,,,,no,no,nifty50
+n500_top10_exit30,nifty500,,,10,30,10,1,30,5,,,,,no,no,nifty50
+n200_top20_exit40,nifty200,,,20,40,20,1,30,5,,,,,no,no,nifty50
+n50_top10_exit20,nifty50,,,10,20,10,1,30,10,,,,,no,no,nifty50
+midcap100_top15_exit30,niftymidcap100,,,15,30,15,1,30,3,,,,,no,no,nifty50
+n500_top20_exit40_trendfilter,nifty500,,,20,40,20,1,30,5,,,,,yes,yes,nifty50
+marketcap_1000_5000_top20,marketcap,1000,5000,20,40,20,1,30,3,,,,,no,no,nifty50
