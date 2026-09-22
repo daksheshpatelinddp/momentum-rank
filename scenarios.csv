@@ -10,16 +10,39 @@
 # step [1]             : rebalance every N months
 # cost_bps [30]        : cost per buy/sell, basis points
 # min_turnover_cr [5]  : minimum median daily traded value, Rs crore
-# w_r3,w_r6vol,w_r12_1,w_nearhigh [0.25,0.30,0.25,0.20] : score weights, need not sum to 1
-# stock_sma200 [no]    : yes = only buy/hold a stock while its close is above its own 200-day SMA
-# index_sma200 [no]    : yes = only buy while the reference index is above its 200-day SMA
-# index [nifty50]      : which index to use for index_sma200 (nifty50 or nifty500)
+# start, end [blank = all available history] : restrict this scenario to a date range,
+#                        e.g. start=2020-01-01 end=2023-12-31 (YYYY-MM-DD). The price DATA
+#                        downloaded is controlled separately by the workflow's
+#                        "history_start" input; this just windows which part of it a given
+#                        scenario trades over, with no need to re-download anything.
+#
+# SEVEN selectable score measures. Set a weight to 0 (or leave blank) to drop that measure.
+# Leaving EVERY weight column blank for a row uses the default mix shown below; filling in
+# ANY of them switches that row to "only what I filled in" (others become 0, not their
+# individual default) -- so "just w_r3=1" really means "rank on 3-month return alone".
+#   w_r3       [0.25 when all blank] : plain 3-month return
+#   w_r3vol    [0]                   : 3-month return / trailing volatility
+#   w_r6       [0]                   : plain 6-month return
+#   w_r6vol    [0.30 when all blank] : 6-month return / trailing volatility (the old default)
+#   w_r12_1    [0.25 when all blank] : 12-month return, skipping the latest month
+#   w_r12_1vol [0]                   : ...same, divided by volatility
+#   w_nearhigh [0.20 when all blank] : closeness to the 52-week high
+#
+# stock_sma200 [no]    : only buy/hold a stock while its close is above its own 200-day SMA
+# index_sma200 [no]    : only make NEW buys while the reference index is above its 200-day SMA
+#                        (needs data/index_<name>.csv from fetch_index_history.py for the
+#                        REAL index level; otherwise falls back to a rough universe-average proxy)
+# index [nifty50]      : which index for index_sma200 -- nifty50, nifty100, nifty200, nifty500,
+#                        niftymidcap100 or niftysmallcap100
 
-name,universe,min_marketcap_cr,max_marketcap_cr,entry,exit,n,step,cost_bps,min_turnover_cr,w_r3,w_r6vol,w_r12_1,w_nearhigh,stock_sma200,index_sma200,index
-n500_top20_exit40,nifty500,,,20,40,20,1,30,5,,,,,yes,no,nifty50
-n500_top10_exit30,nifty500,,,10,30,10,1,30,5,,,,,yes,no,nifty50
-n200_top20_exit40,nifty200,,,20,40,20,1,30,5,,,,,yes,no,nifty50
-n50_top10_exit20,nifty50,,,10,20,10,1,30,10,,,,,no,yes,nifty50
-midcap100_top15_exit30,niftymidcap100,,,15,30,15,1,30,3,,,,,yes,no,nifty50
-n500_top20_exit40_trendfilter,nifty500,,,20,40,20,1,30,5,,,,,yes,yes,nifty50
-# marketcap_1000_5000_top20,marketcap,1000,5000,20,40,20,1,30,3,,,,,yes,no,nifty50
+name,universe,min_marketcap_cr,max_marketcap_cr,entry,exit,n,step,cost_bps,min_turnover_cr,w_r3,w_r3vol,w_r6,w_r6vol,w_r12_1,w_r12_1vol,w_nearhigh,stock_sma200,index_sma200,index,start,end
+n500_top20_exit40,nifty500,,,20,40,20,1,30,5,,,,,,,,no,no,nifty50,,
+n500_top10_exit30,nifty500,,,10,30,10,1,30,5,,,,,,,,no,no,nifty50,,
+n200_top20_exit40,nifty200,,,20,40,20,1,30,5,,,,,,,,no,no,nifty50,,
+n50_top10_exit20,nifty50,,,10,20,10,1,30,10,,,,,,,,no,no,nifty50,,
+midcap100_top15_exit30,niftymidcap100,,,15,30,15,1,30,3,,,,,,,,no,no,nifty50,,
+n500_top20_exit40_trendfilter,nifty500,,,20,40,20,1,30,5,,,,,,,,yes,yes,nifty50,,
+marketcap_1000_5000_top20,marketcap,1000,5000,20,40,20,1,30,3,,,,,,,,no,no,nifty50,,
+n500_r3_only,nifty500,,,20,40,20,1,30,5,1,,,,,,,no,no,nifty50,,
+n500_all_volatility_adjusted,nifty500,,,20,40,20,1,30,5,,0.33,,,,0.33,0.34,no,no,nifty50,,
+n500_since2020,nifty500,,,20,40,20,1,30,5,,,,,,,,no,no,nifty50,2020-01-01,

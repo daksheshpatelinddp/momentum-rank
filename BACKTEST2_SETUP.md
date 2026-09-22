@@ -1,9 +1,10 @@
 # Multi-scenario backtest — setup
 
 ## 1. Add these files to the repo
-- `fetch_history.py`, `universe.py`, `backtest2.py` — new
-- `scenarios.csv` — new (edit this to define your scenarios)
-- `.github/workflows/backtest2.yml` — new workflow
+- `fetch_history.py`, `fetch_index_history.py`, `universe.py`, `backtest2.py` — new
+- `scenarios.csv` — replace (adds date range + individually selectable/volatility-adjusted
+  score measures)
+- `.github/workflows/backtest2.yml` — replace (adds the index-level download step)
 - `selftest.py` — replace with the updated one
 
 ## 2. Edit scenarios.csv

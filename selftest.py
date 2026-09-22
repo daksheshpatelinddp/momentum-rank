@@ -18,6 +18,7 @@ from fetch_bhav import parse_bhav, parse_sec, NotAZip, WrongDate, BadFormat
 from fetch_bse import parse_bse
 import backtest as bt
 import backtest2 as bt2
+import fetch_index_history as fih
 import universe as uv
 
 
@@ -419,6 +420,29 @@ def test_universe_and_backtest2():
             ranks = bt2.compute_ranks(P, bt2.DEFAULT_WEIGHTS, list(P.columns), min_turnover_cr=0)
             check(ranks.iloc[-1].idxmin() == "S19", "backtest2: fastest riser ranks first (own compute_ranks)")
 
+            # single-measure scenario: only w_r3 nonzero
+            only_r3 = {"r3": 1.0, "r3_vol": 0, "r6": 0, "r6_vol": 0, "r12_1": 0, "r12_1_vol": 0, "near_high": 0}
+            ranks_r3 = bt2.compute_ranks(P, only_r3, list(P.columns), min_turnover_cr=0)
+            check(not ranks_r3.equals(ranks), "backtest2: a single nonzero weight (r3 only) gives a different ranking than the default mix")
+
+            # a choppy climber should rank worse on r6_vol than a smooth one with the same total return
+            dv = pd.bdate_range("2020-01-01", periods=400)
+            smooth = 100 * np.exp(np.cumsum(np.full(400, 0.0012)))
+            choppy = 100 * np.exp(np.cumsum(np.where(np.arange(400) % 2 == 0, 0.03, -0.0276)))
+            Pv = pd.DataFrame({"SMOOTH": smooth, "CHOPPY": choppy,
+                               **{f"F{i}": 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 400))) for i in range(15)}}, index=dv)
+            only_r6vol = {"r3": 0, "r3_vol": 0, "r6": 0, "r6_vol": 1.0, "r12_1": 0, "r12_1_vol": 0, "near_high": 0}
+            rv = bt2.compute_ranks(Pv, only_r6vol, list(Pv.columns), min_turnover_cr=0)
+            check(rv.iloc[-1]["SMOOTH"] < rv.iloc[-1]["CHOPPY"],
+                  "backtest2: w_r6vol ranks the smoother climber ahead of the choppier one with similar total return")
+
+            try:
+                bt2.compute_ranks(P, {k: 0 for k in bt2.MEASURES}, list(P.columns), min_turnover_cr=0)
+            except SystemExit:
+                print("ok  - backtest2: all-zero weights is rejected with a clear error")
+            else:
+                check(False, "backtest2: all-zero weights is rejected with a clear error")
+
             gate = pd.Series(False, index=ranks.index)          # index filter always closed
             res = bt2.simulate(P, ranks, n=5, entry=5, exit_=10, cost_bps=0, buy_gate=gate)
             check(len(res["trades"]) == 0, "backtest2: buy_gate closed for the whole run makes zero trades")
@@ -426,8 +450,51 @@ def test_universe_and_backtest2():
             gate2 = pd.Series(True, index=ranks.index)
             res2 = bt2.simulate(P, ranks, n=5, entry=5, exit_=10, cost_bps=0, buy_gate=gate2)
             check(len(res2["trades"]) > 0, "backtest2: buy_gate open lets trades happen")
+
+            windowed = bt2.compute_ranks(P, bt2.DEFAULT_WEIGHTS, list(P.columns), min_turnover_cr=0,
+                                         start=str(dates[300].date()))
+            check(windowed.index.min() >= dates[300], "backtest2: start= actually restricts the ranking window")
+
+            os.makedirs("data", exist_ok=True)
+            open("data/index_test.csv", "w").write("date,close\n" + "\n".join(
+                f"{d.date()},{100 + i}" for i, d in enumerate(dates[::20])))
+            s_idx, src = bt2.load_index_series("test", P)
+            check(src.startswith("file") and len(s_idx) > 0, "backtest2: a real data/index_<name>.csv is read, not the proxy")
         finally:
             os.chdir(cwd)
+
+
+def test_scenario_weight_defaults():
+    import tempfile
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            open("scenarios.csv", "w").write(
+                "name,universe,entry,exit,w_r3\n"
+                "all_default,nifty500,20,40,\n"          # every weight blank -> default mix
+                "r3_only,nifty500,20,40,1\n")             # one weight set -> ONLY that measure
+            df = bt2.load_scenarios("scenarios.csv")
+            d = df.set_index("name")
+            check(d.loc["all_default", "w_r6vol"] == bt2.DEFAULT_WEIGHTS["r6_vol"],
+                  "scenarios.csv: a row with every weight blank gets the default mix")
+            check(d.loc["r3_only", "w_r3"] == 1.0 and d.loc["r3_only", "w_r6vol"] == 0.0
+                  and d.loc["r3_only", "w_r12_1"] == 0.0 and d.loc["r3_only", "w_nearhigh"] == 0.0,
+                  "scenarios.csv: a row with only w_r3 set does NOT silently mix in the other defaults")
+        finally:
+            os.chdir(cwd)
+
+
+def test_index_history_parsing():
+    sample = {"data": {"indexCloseOnlineRecords": [
+        {"EOD_TIMESTAMP": "01-Jan-2020", "EOD_CLOSE_INDEX_VAL": "12,168.45"},
+        {"EOD_TIMESTAMP": "02-Jan-2020", "EOD_CLOSE_INDEX_VAL": "12,282.20"},
+    ]}}
+    rows = fih._rows_from_json(sample)
+    check(len(rows) == 2, "index history: records found inside the nested BSE/NSE-style JSON shape")
+    d = fih._pick(rows[0], "EOD_TIMESTAMP")
+    c = fih._pick(rows[0], "EOD_CLOSE_INDEX_VAL")
+    check(d == "01-Jan-2020" and c == "12,168.45", "index history: field lookup is case/underscore-insensitive")
 
 
 def make_zip(rows, header=None, name="bhav.csv"):
@@ -477,6 +544,8 @@ if __name__ == "__main__":
     test_auto_detection()
     test_backtest()
     test_universe_and_backtest2()
+    test_index_history_parsing()
+    test_scenario_weight_defaults()
     test_announcements()
     test_parser()
     print("ALL SELFTESTS PASSED")

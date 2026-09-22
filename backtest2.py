@@ -24,7 +24,17 @@ from backtest import stats, pct, md_table, yearly, month_end_dates
 HISTORY = "data/history.csv"
 OUT_DIR = "output/scenarios"
 SUMMARY = "output/backtest_summary.md"
-DEFAULT_WEIGHTS = {"r6_per_vol": 0.30, "r12_1": 0.25, "r3": 0.25, "near_high": 0.20}
+# Seven selectable measures. Set a weight to 0 (or leave the column blank) to drop it from
+# the score entirely -- so "use just one return" is simply one nonzero weight; "volatility
+# adjust the 3-month return too" is putting weight on r3_vol instead of/as well as r3.
+# The *_vol variants divide the plain return by the stock's trailing 6-month volatility
+# (annualised), the same calculation already used for r6_vol -- a smoother climb outranks
+# an equally-sized but choppier one.
+MEASURES = ["r3", "r3_vol", "r6", "r6_vol", "r12_1", "r12_1_vol", "near_high"]
+MEASURE_COL = {"r3": "w_r3", "r3_vol": "w_r3vol", "r6": "w_r6", "r6_vol": "w_r6vol",
+              "r12_1": "w_r12_1", "r12_1_vol": "w_r12_1vol", "near_high": "w_nearhigh"}
+DEFAULT_WEIGHTS = {"r3": 0.25, "r3_vol": 0.0, "r6": 0.0, "r6_vol": 0.30,
+                   "r12_1": 0.25, "r12_1_vol": 0.0, "near_high": 0.20}
 LOOKBACKS = {"m1": 30, "m3": 90, "m6": 180, "y1": 365}
 CR = 1e7
 
@@ -97,8 +107,9 @@ def load_index_series(name, close_panel):
     the price panel (a rough proxy - a real index file gives a truer signal)."""
     path = f"data/index_{name}.csv"
     if os.path.exists(path):
-        s = pd.read_csv(path, index_col=0, parse_dates=True).iloc[:, 0]
-        return s, "file"
+        df = pd.read_csv(path, parse_dates=["date"])
+        s = df.set_index("date")["close"].sort_index()
+        return s, f"file ({path}, {s.index.min().date()} to {s.index.max().date()})"
     proxy = (close_panel / close_panel.iloc[0]).mean(axis=1)
     return proxy, "proxy (equal-weight average of the universe; no data/index_%s.csv found)" % name
 
@@ -106,11 +117,22 @@ def load_index_series(name, close_panel):
 # ---------------------------------------------------------------------------------------
 # Ranking and simulation (extends backtest.py's ideas with universe + trend filters)
 # ---------------------------------------------------------------------------------------
-def compute_ranks(close, weights, universe_syms, min_turnover_cr=5.0, stock_sma200=False):
+def compute_ranks(close, weights, universe_syms, min_turnover_cr=5.0, stock_sma200=False,
+                  vol_window=180, start=None, end=None):
+    """weights: dict of measure -> weight, keys from MEASURES. A measure with weight 0 (or
+    missing) is dropped from the score entirely, so picking "just r3" is one nonzero weight,
+    and "volatility-adjust r3 too" is putting weight on r3_vol alongside or instead of r3."""
     P = close[[c for c in universe_syms if c in close.columns]].ffill(limit=5)
+    if start is not None:
+        P = P[P.index >= pd.Timestamp(start)]
+    if end is not None:
+        P = P[P.index <= pd.Timestamp(end)]
     if P.shape[1] < 10:
-        raise SystemExit(f"Only {P.shape[1]} of this universe's symbols have price history; "
-                         "check the universe file and data/history.csv.")
+        raise SystemExit(f"Only {P.shape[1]} of this universe's symbols have price history in "
+                         "this date range; check the universe file, data/history.csv, and start/end.")
+    used = {k for k, w in weights.items() if w}
+    if not used:
+        raise SystemExit("Every weight is 0 - at least one w_* column must be non-zero.")
     R = P / P.shift(1) - 1
     idx = P.index
     out = {}
@@ -124,14 +146,17 @@ def compute_ranks(close, weights, universe_syms, min_turnover_cr=5.0, stock_sma2
         p_now, p1m, p3m, p6m, p1y = P.iloc[pos], at(30), at(90), at(180), at(365)
         if idx[0] > t - pd.Timedelta(days=365):
             continue
-        s6 = idx.searchsorted(t - pd.Timedelta(days=180), side="right") - 1
+        sV = idx.searchsorted(t - pd.Timedelta(days=vol_window), side="right") - 1
         s1y = idx.searchsorted(t - pd.Timedelta(days=365), side="right") - 1
-        rr = R.iloc[s6 + 1:pos + 1]
+        rr = R.iloc[sV + 1:pos + 1]
         vol = rr.std() * np.sqrt(252)
-        vol = vol.where((rr.count() >= 60) & (vol > 0))
+        vol = vol.where((rr.count() >= max(20, vol_window // 5)) & (vol > 0))
         hi = P.iloc[s1y:pos + 1].max()
-        m = pd.DataFrame({"r3": p_now / p3m - 1, "r6_per_vol": (p_now / p6m - 1) / vol,
-                          "r12_1": p1m / p1y - 1, "near_high": p_now / hi})
+
+        r3, r6, r12_1 = p_now / p3m - 1, p_now / p6m - 1, p1m / p1y - 1
+        avail = {"r3": r3, "r3_vol": r3 / vol, "r6": r6, "r6_vol": r6 / vol,
+                "r12_1": r12_1, "r12_1_vol": r12_1 / vol, "near_high": p_now / hi}
+        m = pd.DataFrame({k: avail[k] for k in used})
         ok = m.notna().all(axis=1)
         if min_turnover_cr > 0:
             med = P.iloc[max(0, pos - 60):pos + 1].median()   # price only: true turnover needs
@@ -143,8 +168,8 @@ def compute_ranks(close, weights, universe_syms, min_turnover_cr=5.0, stock_sma2
         m = m[ok]
         if len(m) < 10:
             continue
-        pct_ = m[list(weights)].rank(pct=True)
-        score = sum(w * pct_[k] for k, w in weights.items())
+        pct_ = m.rank(pct=True)
+        score = sum(weights[k] * pct_[k] for k in used)
         out[t] = score.rank(ascending=False, method="first")
     if not out:
         raise SystemExit("No rebalance date had enough eligible stocks for this scenario.")
@@ -231,47 +256,86 @@ def load_scenarios(path="scenarios.csv"):
     need = {"name", "universe", "entry", "exit"}
     if not need.issubset(df.columns):
         raise SystemExit(f"scenarios.csv must have at least the columns: {sorted(need)}")
-    df["n"] = df.get("n", df["entry"]).fillna(df["entry"]).astype(int)
-    df["step"] = df.get("step", 1).fillna(1).astype(int)
-    df["cost_bps"] = df.get("cost_bps", 30).fillna(30).astype(float)
-    df["min_turnover_cr"] = df.get("min_turnover_cr", 5).fillna(5).astype(float)
+    if "n" not in df.columns:
+        df["n"] = np.nan
+    df["n"] = pd.to_numeric(df["n"], errors="coerce").fillna(df["entry"]).astype(int)
+    if "step" not in df.columns:
+        df["step"] = np.nan
+    df["step"] = pd.to_numeric(df["step"], errors="coerce").fillna(1).astype(int)
+    if "cost_bps" not in df.columns:
+        df["cost_bps"] = np.nan
+    df["cost_bps"] = pd.to_numeric(df["cost_bps"], errors="coerce").fillna(30).astype(float)
+    if "min_turnover_cr" not in df.columns:
+        df["min_turnover_cr"] = np.nan
+    df["min_turnover_cr"] = pd.to_numeric(df["min_turnover_cr"], errors="coerce").fillna(5).astype(float)
     for c in ("stock_sma200", "index_sma200"):
-        df[c] = df.get(c, "no").fillna("no").astype(str).str.strip().str.lower().isin(("yes", "y", "true", "1"))
-    df["index"] = df.get("index", "nifty50").fillna("nifty50")
-    for c, dflt in [("w_r3", 0.25), ("w_r6vol", 0.30), ("w_r12_1", 0.25), ("w_nearhigh", 0.20)]:
-        df[c] = pd.to_numeric(df.get(c), errors="coerce").fillna(dflt)
+        if c not in df.columns:
+            df[c] = "no"
+        df[c] = df[c].fillna("no").astype(str).str.strip().str.lower().isin(("yes", "y", "true", "1"))
+    if "index" not in df.columns:
+        df["index"] = "nifty50"
+    df["index"] = df["index"].fillna("nifty50")
+    # Weight defaults only apply as a WHOLE SET, when a row leaves every weight column blank
+    # (the default mix). The moment a row fills in ANY weight, every other blank weight in
+    # that row means 0 (dropped), not "use its individual default" -- otherwise "just w_r3"
+    # would silently keep the default r6_vol/r12_1/near_high mixed in too.
+    wcols = ["w_r3", "w_r3vol", "w_r6", "w_r6vol", "w_r12_1", "w_r12_1vol", "w_nearhigh"]
+    for c in wcols:
+        if c not in df.columns:
+            df[c] = np.nan
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    row_touched = df[wcols].notna().any(axis=1)
+    for c in wcols:
+        default_key = {"w_r3": "r3", "w_r3vol": "r3_vol", "w_r6": "r6", "w_r6vol": "r6_vol",
+                       "w_r12_1": "r12_1", "w_r12_1vol": "r12_1_vol", "w_nearhigh": "near_high"}[c]
+        df[c] = np.where(row_touched, df[c].fillna(0.0),
+                        DEFAULT_WEIGHTS[default_key])
     for c in ("min_marketcap_cr", "max_marketcap_cr"):
         if c not in df.columns:
             df[c] = np.nan
+    for c in ("start", "end"):
+        if c not in df.columns:
+            df[c] = np.nan
+        else:
+            df[c] = df[c].replace("", np.nan)
+    if "vol_adjust" not in df.columns:
+        df["vol_adjust"] = "r6"
+    df["vol_adjust"] = df["vol_adjust"].fillna("r6").astype(str)
     return df
 
 
 def run_scenario(row, close_full, index_cache, notes_all):
     syms = uv.resolve(row.universe, row.min_marketcap_cr, row.max_marketcap_cr)
-    weights = {"r3": row.w_r3, "r6_per_vol": row.w_r6vol, "r12_1": row.w_r12_1, "near_high": row.w_nearhigh}
+    weights = {k: getattr(row, MEASURE_COL[k]) for k in MEASURES}
     close = close_full[[c for c in syms if c in close_full.columns]]
     missing = [s for s in syms if s not in close_full.columns]
-    ranks = compute_ranks(close, weights, syms, row.min_turnover_cr, row.stock_sma200)
+    start = None if pd.isna(row.start) else str(row.start)
+    end = None if pd.isna(row.end) else str(row.end)
+    ranks = compute_ranks(close, weights, syms, row.min_turnover_cr, row.stock_sma200,
+                          start=start, end=end)
 
     buy_gate = None
     idx_note = ""
     if row.index_sma200:
         if row.index not in index_cache:
             index_cache[row.index] = load_index_series(row.index, close)
-        s, source = index_cache[row.index]
-        buy_gate = index_ok_mask(s, ranks.index)
+        idx_series, source = index_cache[row.index]
+        buy_gate = index_ok_mask(idx_series, ranks.index)
         idx_note = f" Index trend filter uses {source}."
 
     res = simulate(close, ranks, n=row.n, entry=row.entry, exit_=row.exit, cost_bps=row.cost_bps,
                    step=row.step, buy_gate=buy_gate)
     st = stats(res["equity"])
     os.makedirs(OUT_DIR, exist_ok=True)
+    used_str = ", ".join(f"{k} ({v:.2f})" for k, v in weights.items() if v)
     md = [f"# {row.name}\n",
           f"Universe: **{row.universe}**"
+          + (f", data from {start}" if start else "") + (f" to {end}" if end else "")
           + (f" ({row.min_marketcap_cr or '-'} to {row.max_marketcap_cr or '-'} Rs crore)"
              if row.universe == "marketcap" else f", {len(syms)} symbols, {len(missing)} missing prices")
           + f". Buy top **{row.entry}**, hold up to **{row.n}**, exit below rank **{row.exit}**, "
           f"rebalance every {row.step} month(s), cost {row.cost_bps:.0f} bps."
+          + f" Score uses: {used_str}."
           + (" Stock must be above its own 200-day average to be bought/held." if row.stock_sma200 else "")
           + (f" New buys only while {row.index} is above its 200-day average.{idx_note}" if row.index_sma200 else "")
           + "\n",
