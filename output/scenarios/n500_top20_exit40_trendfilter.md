@@ -4,11 +4,11 @@ Universe: **nifty500**, 501 symbols, 1 missing prices. Buy top **20**, hold up t
 
 | Period | CAGR | Total return | Volatility | Sharpe | Max drawdown | Positive months | Yearly turnover | Avg holdings |
 |---|---|---|---|---|---|---|---|---|
-| 2025-01-01 to 2026-09-21 (1.7y) | -4.3% | -7.3% | 19.4% | -0.48 | -25.2% | 60.0% | 622% | 16.1 |
+| 2025-01-01 to 2026-09-21 (1.7y) | 11.1% | 19.8% | 15.4% | 0.39 | -17.0% | 70.0% | 505% | 13.4 |
 
 ## Year by year
 
 | Year | Return |
 |---|---|
-| 2025 | -11.7% |
-| 2026 | 4.9% |
+| 2025 | 14.3% |
+| 2026 | 4.8% |
