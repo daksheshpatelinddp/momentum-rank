@@ -22,4 +22,4 @@ n200_top20_exit40,nifty200,,,20,40,20,1,30,5,,,,,no,no,nifty50
 n50_top10_exit20,nifty50,,,10,20,10,1,30,10,,,,,no,no,nifty50
 midcap100_top15_exit30,niftymidcap100,,,15,30,15,1,30,3,,,,,no,no,nifty50
 n500_top20_exit40_trendfilter,nifty500,,,20,40,20,1,30,5,,,,,yes,yes,nifty50
-marketcap_1000_5000_top20,marketcap,1000,5000,20,40,20,1,30,3,,,,,no,no,nifty50
+#marketcap_1000_5000_top20,marketcap,1000,5000,20,40,20,1,30,3,,,,,no,no,nifty50
