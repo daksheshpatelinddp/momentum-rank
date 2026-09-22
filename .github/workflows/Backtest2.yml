@@ -10,6 +10,10 @@ on:
         description: "Re-download the Nifty index lists (nifty50/100/200/500/midcap100/smallcap100) even if already present"
         type: boolean
         default: false
+      skip_history_download:
+        description: "Skip downloading new NSE prices and just re-run scenarios on the data already saved in the repo (fast - use this when you've only edited scenarios.csv)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -36,6 +40,7 @@ jobs:
         run: python selftest.py
 
       - name: Download index constituent lists
+        if: ${{ inputs.skip_history_download != 'true' }}
         run: |
           python -c "
           import universe, json
@@ -44,6 +49,7 @@ jobs:
           "
 
       - name: Download / continue NSE price history
+        if: ${{ inputs.skip_history_download != 'true' }}
         env:
           HISTORY_START: ${{ inputs.history_start }}
         run: python fetch_history.py
@@ -53,7 +59,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/history.csv universe/ 2>/dev/null || true
+          git add data/history.csv data/index_*.csv universe/ 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "Nothing to commit"
           else
