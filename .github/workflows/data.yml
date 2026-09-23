@@ -1,0 +1,66 @@
+name: Download backtest price data
+
+on:
+  workflow_dispatch:
+    inputs:
+      history_start:
+        description: "Earliest date for NSE price history (YYYY-MM-DD). Only needed the first time; later runs resume from where the data already is."
+        default: "2013-01-01"
+      refresh_indices:
+        description: "Re-download the Nifty index constituent lists even if already present"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: momentum-backtest-data
+  cancel-in-progress: false
+
+jobs:
+  data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packages
+        run: pip install -r requirements.txt
+
+      - name: Download index constituent lists
+        run: |
+          python -c "
+          import universe, json
+          force = '${{ inputs.refresh_indices }}'.strip().lower() == 'true'
+          print(json.dumps(universe.fetch_index_lists(force=force), indent=1))
+          "
+
+      - name: Download / continue NSE price history (close, prev_close, volume)
+        env:
+          HISTORY_START: ${{ inputs.history_start }}
+        run: python fetch_history.py
+
+      - name: Download Nifty index levels (for index_sma200 filters)
+        continue-on-error: true
+        env:
+          HISTORY_START: ${{ inputs.history_start }}
+        run: python fetch_index_history.py
+
+      - name: Save data to the repo
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/history.csv data/index_*.csv universe/ 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Nothing to commit"
+          else
+            git commit -m "Update backtest price data"
+            git pull --rebase --autostash
+            git push
+          fi
