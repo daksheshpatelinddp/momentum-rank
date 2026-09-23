@@ -4,7 +4,7 @@
 
 | Scenario | Universe | Enter/Exit | CAGR | Max drawdown | Sharpe | Win rate | Profit factor | Yearly turnover | Ending value |
 |---|---|---|---|---|---|---|---|---|---|
-| n500_top20_exit40 | nifty500 | 20/40 | 2.0% | -27.4% | -0.13 | 40.5% | 0.74 | 760% | Rs 515,993 |
+| n500_top20_exit40 | nifty500 | 20/40 | -4.3% | -25.2% | -0.48 | 30.4% | 0.47 | 622% | Rs 461,952 |
 
 ## Data notes
 
