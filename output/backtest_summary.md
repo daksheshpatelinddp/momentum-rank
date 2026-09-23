@@ -4,9 +4,9 @@
 
 | Scenario | Universe | Enter/Exit | CAGR | Max drawdown | Sharpe | Win rate | Profit factor | Yearly turnover | Ending value |
 |---|---|---|---|---|---|---|---|---|---|
-| n50005_12 | nifty500 | 20/40 | FAILED | No rebalance date had enough eligible stocks for this scenario. |  |  |  |  |  |
-| n50013_19 | nifty500 | 20/40 | FAILED | No rebalance date had enough eligible stocks for this scenario. |  |  |  |  |  |
-| n50020_26 | nifty500 | 20/40 | -4.6% | -25.2% | -0.49 | 30.4% | 0.47 | 621% | Rs 459,940 |
+| n50005_12 | nifty500 | 20/20 | FAILED | No rebalance date had enough eligible stocks for this scenario. |  |  |  |  |  |
+| n50013_19 | nifty500 | 20/20 | FAILED | No rebalance date had enough eligible stocks for this scenario. |  |  |  |  |  |
+| n50020_26 | nifty500 | 20/20 | -7.4% | -26.1% | -0.67 | 34.5% | 0.41 | 874% | Rs 436,479 |
 
 ## Data notes
 
