@@ -54,9 +54,16 @@ jobs:
       - name: Save data to the repo
         if: always()
         run: |
+          shopt -s nullglob
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/history.csv data/index_*.csv universe/ 2>/dev/null || true
+          # Each group is added on its own line, and any that finds nothing is a no-op
+          # (nullglob) -- one missing/failed download can never block committing the others.
+          [ -f data/history.csv ] && git add data/history.csv
+          for f in data/index_*.csv; do git add "$f"; done
+          [ -d universe ] && git add universe/
+          echo "Staged files:"
+          git diff --cached --name-only
           if git diff --cached --quiet; then
             echo "Nothing to commit"
           else
