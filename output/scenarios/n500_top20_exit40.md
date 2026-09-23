@@ -6,13 +6,13 @@ Score uses: r3 (0.25), r6_vol (0.30), r12_1 (0.25), near_high (0.20). Extra filt
 
 | Period | Starting capital | Ending value | CAGR | Total return | Volatility | Sharpe | Max drawdown |
 |---|---|---|---|---|---|---|---|
-| 2025-01-01 to 2026-09-21 (1.7y) | Rs 500,000 | Rs 461,952 | -4.3% | -7.3% | 19.4% | -0.48 | -25.2% |
+| 2025-01-01 to 2026-09-22 (1.7y) | Rs 500,000 | Rs 459,940 | -4.6% | -7.8% | 19.4% | -0.49 | -25.2% |
 
 ## Trade statistics (Amibroker-style)
 
 | Closed trades | Win rate | Avg win | Avg loss | Profit factor | Avg holding period | Max consecutive losses | Time invested | Yearly turnover | Avg holdings |
 |---|---|---|---|---|---|---|---|---|---|
-| 102 | 30.4% | Rs 3,086 | Rs -2,894 | 0.47 | 85 days | 21 | 100.0% | 622% | 16.1 |
+| 102 | 30.4% | Rs 3,086 | Rs -2,894 | 0.47 | 85 days | 21 | 100.0% | 621% | 16.1 |
 
 Tax paid during the run: Rs 0. Tax owed on gains still open at the end (not yet paid): Rs 0 (subtracted from 'Ending value' above). Rough model: 20% short-term / 12.5% long-term (12+ months), netted per financial year - check current rates.
 
@@ -25,4 +25,4 @@ Tax paid during the run: Rs 0. Tax owed on gains still open at the end (not yet 
 | Year | Return |
 |---|---|
 | 2025 | -11.7% |
-| 2026 | 4.9% |
+| 2026 | 4.5% |

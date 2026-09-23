@@ -4,13 +4,13 @@
 
 | Scenario | Universe | Enter/Exit | CAGR | Max drawdown | Sharpe | Win rate | Profit factor | Yearly turnover | Ending value |
 |---|---|---|---|---|---|---|---|---|---|
-| n500_top20_exit40 | nifty500 | 20/40 | -4.3% | -25.2% | -0.48 | 30.4% | 0.47 | 622% | Rs 461,952 |
+| n500_top20_exit40 | nifty500 | 20/40 | -4.6% | -25.2% | -0.49 | 30.4% | 0.47 | 621% | Rs 459,940 |
 
 ## Data notes
 
 - Volume data covers only 0% of prices (bhavcopy rows fetched before volume capture was added have none). Turnover-based liquidity filtering and the volume-surge indicator fall back to a price-only approximation until you rebuild data/history.csv. Bonus/split-adjusted returns are unaffected.
-- BSE announcements: 6223 read, 73 applied with an exact factor, 11 could not be given a factor automatically.
-- NSE announcements: 6355 read, 83 applied with an exact factor, 2 could not be given a factor automatically.
+- BSE announcements: 6287 read, 73 applied with an exact factor, 11 could not be given a factor automatically.
+- NSE announcements: 6400 read, 83 applied with an exact factor, 2 could not be given a factor automatically.
 - Automatic price check: 13 one-day move(s) too large for normal trading, with no announcement confirming them, adjusted with an ESTIMATED factor.
 - Total corporate-action adjustments applied: 96 (18 estimated).
 
