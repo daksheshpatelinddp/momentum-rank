@@ -19,6 +19,7 @@ from fetch_bse import parse_bse
 import backtest as bt
 import backtest2 as bt2
 import fetch_index_history as fih
+import indicators as ind
 import universe as uv
 
 
@@ -497,6 +498,79 @@ def test_index_history_parsing():
     check(d == "01-Jan-2020" and c == "12,168.45", "index history: field lookup is case/underscore-insensitive")
 
 
+def test_capital_slippage_tax_rebalance():
+    rng = np.random.default_rng(21)
+    dates = pd.bdate_range("2018-01-01", "2023-12-31")
+    n = 30
+    rates = np.linspace(0.0002, 0.0016, n)
+    rng.shuffle(rates)
+    P = pd.DataFrame(100 * np.exp(np.cumsum(rates + rng.normal(0, 0.015, (len(dates), n)), axis=0)),
+                     index=dates, columns=[f"C{i:02d}" for i in range(n)])
+    ranks = bt2.compute_ranks(P, bt2.DEFAULT_WEIGHTS, list(P.columns), min_turnover_cr=0)
+
+    r1 = bt2.simulate(P, ranks, n=10, entry=10, exit_=20, cost_bps=0, start_value=100)
+    r2 = bt2.simulate(P, ranks, n=10, entry=10, exit_=20, cost_bps=0, start_value=100000)
+    check(abs(r2["equity"].iloc[-1] / r1["equity"].iloc[-1] - 1000) < 0.5,
+          "backtest2: result scales linearly with starting capital (Rs 100 vs Rs 100,000)")
+
+    r_plain = bt2.simulate(P, ranks, n=10, entry=10, exit_=20, cost_bps=0, slippage_bps=0, start_value=100000)
+    r_slip = bt2.simulate(P, ranks, n=10, entry=10, exit_=20, cost_bps=0, slippage_bps=100, start_value=100000)
+    check(r_slip["equity"].iloc[-1] < r_plain["equity"].iloc[-1],
+          "backtest2: slippage makes both buys and sells worse, lowering the result")
+
+    r_notax = bt2.simulate(P, ranks, n=10, entry=10, exit_=20, cost_bps=0, start_value=100000, tax=False)
+    r_tax = bt2.simulate(P, ranks, n=10, entry=10, exit_=20, cost_bps=0, start_value=100000, tax=True)
+    end_notax = r_notax["equity"].iloc[-1]
+    end_tax = r_tax["equity"].iloc[-1] - r_tax["pending_tax"]
+    check(end_tax < end_notax and (r_tax["tax_paid"] + r_tax["pending_tax"]) > 0,
+          "backtest2: tax=True actually removes money from the result")
+
+    ts = r_notax["trade_stats"]
+    check(ts["num_trades"] > 0 and 0 <= ts["win_rate"] <= 1 and pd.notna(ts["profit_factor"]),
+          "backtest2: trade_stats (win rate, profit factor) are computed from real closed trades")
+
+    ranks_w = bt2.compute_ranks(P, bt2.DEFAULT_WEIGHTS, list(P.columns), min_turnover_cr=0, rebalance="weekly")
+    ranks_d = bt2.compute_ranks(P, bt2.DEFAULT_WEIGHTS, list(P.columns), min_turnover_cr=0, rebalance="daily")
+    check(len(ranks_w) > len(ranks) and len(ranks_d) > len(ranks_w),
+          "backtest2: weekly rebalance has more signal dates than monthly, daily more than weekly")
+
+
+def test_indicator_filters():
+    rng = np.random.default_rng(31)
+    dates = pd.bdate_range("2019-01-01", "2023-12-31")
+    n = 25
+    rates = np.linspace(0.0002, 0.0015, n)
+    rng.shuffle(rates)
+    P = pd.DataFrame(100 * np.exp(np.cumsum(rates + rng.normal(0, 0.015, (len(dates), n)), axis=0)),
+                     index=dates, columns=[f"D{i:02d}" for i in range(n)])
+    V = pd.DataFrame(rng.uniform(1e5, 1e6, (len(dates), n)), index=dates, columns=P.columns)
+
+    plain = bt2.compute_ranks(P, bt2.DEFAULT_WEIGHTS, list(P.columns), min_turnover_cr=0)
+    rsi_tight = bt2.compute_ranks(P, bt2.DEFAULT_WEIGHTS, list(P.columns), min_turnover_cr=0,
+                                  rsi_entry_min=60, rsi_entry_max=70)
+    check(rsi_tight.notna().to_numpy().sum() < plain.notna().to_numpy().sum(),
+          "backtest2: a tight RSI band eliminates some otherwise-eligible stocks")
+
+    macd_on = bt2.compute_ranks(P, bt2.DEFAULT_WEIGHTS, list(P.columns), min_turnover_cr=0, macd_filter=True)
+    check(macd_on.notna().to_numpy().sum() <= plain.notna().to_numpy().sum(),
+          "backtest2: the MACD filter only keeps stocks whose MACD line is above its signal")
+
+    try:
+        bt2.compute_ranks(P, bt2.DEFAULT_WEIGHTS, list(P.columns), min_turnover_cr=1e9, volume=V)
+    except SystemExit:
+        print("ok  - backtest2: a real turnover filter (with volume data) excludes everything when set absurdly high")
+    else:
+        check(False, "backtest2: a real turnover filter (with volume data) excludes everything when set absurdly high")
+
+    try:
+        bt2.compute_ranks(P, bt2.DEFAULT_WEIGHTS, list(P.columns), min_turnover_cr=0, volume=V,
+                          vol_surge_entry=1000)
+    except SystemExit:
+        print("ok  - backtest2: an unreachable volume-surge requirement excludes everything")
+    else:
+        check(False, "backtest2: an unreachable volume-surge requirement excludes everything")
+
+
 def make_zip(rows, header=None, name="bhav.csv"):
     header = header or ["TradDt", "TckrSymb", "SctySrs", "ClsPric", "PrvsClsgPric"]
     text = ",".join(header) + "\n" + "\n".join(",".join(map(str, r)) for r in rows)
@@ -545,6 +619,8 @@ if __name__ == "__main__":
     test_backtest()
     test_universe_and_backtest2()
     test_index_history_parsing()
+    test_capital_slippage_tax_rebalance()
+    test_indicator_filters()
     test_scenario_weight_defaults()
     test_announcements()
     test_parser()

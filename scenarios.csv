@@ -1,25 +1,51 @@
-i# One row = one backtest. Edit freely, add or remove rows, then run the workflow.
-# Blank cells use the default shown in the column name.
+# One row = one backtest. Edit freely, add or remove rows, then run the "Multi-scenario
+# backtest" workflow. Blank cells use the default shown in the column name.
 #
-# universe            : nifty50 | nifty100 | nifty200 | nifty500 | niftymidcap100 |
+# Price data is downloaded SEPARATELY, by the "Download backtest price data" workflow.
+# Run that once (it resumes on later runs, so it's fast after the first time), then run
+# "Multi-scenario backtest" as often as you like while only editing this file - it never
+# re-downloads anything itself.
+#
+# --- universe --------------------------------------------------------------------------
+# universe             : nifty50 | nifty100 | nifty200 | nifty500 | niftymidcap100 |
 #                        niftysmallcap100 | marketcap  (marketcap uses min/max_marketcap_cr
-#                        and universe/marketcap.csv)
+#                        and universe/marketcap.csv, a snapshot you maintain yourself)
+#
+# --- entry / exit rule -------------------------------------------------------------------
 # entry                : buy only stocks ranked this well or better
 # exit                 : sell when the rank is worse than this
 # n [default = entry]  : max number of holdings
-# step [1]             : rebalance every N months
-# cost_bps [30]        : cost per buy/sell, basis points
-# min_turnover_cr [5]  : minimum median daily traded value, Rs crore
-# start, end [blank = all available history] : restrict this scenario to a date range,
-#                        e.g. start=2020-01-01 end=2023-12-31 (YYYY-MM-DD). The price DATA
-#                        downloaded is controlled separately by the workflow's
-#                        "history_start" input; this just windows which part of it a given
-#                        scenario trades over, with no need to re-download anything.
+# rebalance [monthly]  : daily | weekly | monthly - how often ranks are recalculated and
+#                        trades happen. step [1] : do it every N of that unit (step=2 with
+#                        rebalance=weekly means every 2 weeks).
 #
-# SEVEN selectable score measures. Set a weight to 0 (or leave blank) to drop that measure.
-# Leaving EVERY weight column blank for a row uses the default mix shown below; filling in
-# ANY of them switches that row to "only what I filled in" (others become 0, not their
-# individual default) -- so "just w_r3=1" really means "rank on 3-month return alone".
+# --- money -----------------------------------------------------------------------------
+# capital [100000]     : starting capital in rupees - results are shown in real Rs, not just
+#                        an index, so you can see what slippage/costs/tax mean in money terms
+# cost_bps [30]        : brokerage + statutory charges, basis points, charged on every buy/sell
+# slippage_bps [0]     : extra adverse move assumed on the fill price itself (buys fill this
+#                        much higher, sells this much lower) - set 0 to ignore it, or try
+#                        15-30 for a small-cap-heavy universe to see how much it costs you.
+#                        This is a flat assumption, not a true market-impact model (that would
+#                        need tick-level order-book data this backtest does not have) - use the
+#                        min_turnover_cr filter and the "Time invested"/turnover figures in the
+#                        report as a rough capacity check instead.
+# min_turnover_cr [5]  : minimum median daily traded value, Rs crore (needs volume in
+#                        data/history.csv; falls back to a price-only approximation if not)
+# tax [no]             : yes = deduct approximate Indian capital-gains tax (20% short-term,
+#                        12.5% long-term 12m+, netted each financial year) from the results;
+#                        no = costs/slippage only, no tax. Run the SAME scenario both ways to
+#                        see how much tax alone changes the outcome. Check current rates.
+#
+# --- date range --------------------------------------------------------------------------
+# start, end [blank = all available history] : restrict this scenario to a date range, e.g.
+#                        start=2020-01-01 end=2023-12-31 (YYYY-MM-DD). No re-download needed.
+#
+# --- score: SEVEN selectable measures -----------------------------------------------------
+# Set a weight to 0 (or leave blank) to drop that measure. Leaving EVERY weight column blank
+# for a row uses the default mix shown below; filling in ANY of them switches that row to
+# "only what I filled in" (others become 0, not their individual default) -- so "just
+# w_r3=1" really means "rank on 3-month return alone".
 #   w_r3       [0.25 when all blank] : plain 3-month return
 #   w_r3vol    [0]                   : 3-month return / trailing volatility
 #   w_r6       [0]                   : plain 6-month return
@@ -28,21 +54,38 @@ i# One row = one backtest. Edit freely, add or remove rows, then run the workflo
 #   w_r12_1vol [0]                   : ...same, divided by volatility
 #   w_nearhigh [0.20 when all blank] : closeness to the 52-week high
 #
-# stock_sma200 [no]    : only buy/hold a stock while its close is above its own 200-day SMA
+# --- extra entry/exit conditions (all optional; a stock failing any of these is EXCLUDED,
+#     which also forces an exit if it was already held) -----------------------------------
+# stock_sma200 [no]        : only buy/hold a stock while its close is above its own 200-day SMA
+# rsi_period [14]          : the RSI lookback used by the two settings below
+# rsi_entry_min, rsi_entry_max [blank] : only buy/hold while RSI(period) is inside this band,
+#                            e.g. rsi_entry_min=40 rsi_entry_max=80 avoids both dead and
+#                            overbought-and-about-to-turn stocks
+# macd_filter [no]         : only buy/hold while the MACD line is above its signal line
+# macd_fast, macd_slow, macd_signal [12,26,9] : MACD periods, if you want non-default ones
+# vol_surge_entry [blank]  : only buy/hold while 20-day average volume is at least this many
+#                            times the 100-day average, e.g. 1.2 (needs volume data)
+#
+# --- market-wide trend filter -------------------------------------------------------------
 # index_sma200 [no]    : only make NEW buys while the reference index is above its 200-day SMA
-#                        (needs data/index_<name>.csv from fetch_index_history.py for the
-#                        REAL index level; otherwise falls back to a rough universe-average proxy)
+#                        (uses the REAL index level from data/index_<name>.csv if the data
+#                        workflow downloaded it; otherwise falls back to a rough proxy)
 # index [nifty50]      : which index for index_sma200 -- nifty50, nifty100, nifty200, nifty500,
 #                        niftymidcap100 or niftysmallcap100
 
-name,universe,min_marketcap_cr,max_marketcap_cr,entry,exit,n,step,cost_bps,min_turnover_cr,w_r3,w_r3vol,w_r6,w_r6vol,w_r12_1,w_r12_1vol,w_nearhigh,stock_sma200,index_sma200,index,start,end
-n500_top20_exit40,nifty500,,,20,40,20,1,30,5,,,,1,,,,no,no,nifty50,2005-01-01,
-n500_top10_exit30,nifty500,,,10,30,10,1,30,5,,,,1,,,,no,no,nifty50,2005-01-01,
-n200_top20_exit40,nifty200,,,20,40,20,1,30,5,,,,1,,,,no,no,nifty50,2005-01-01,
-n50_top10_exit20,nifty50,,,10,20,10,1,30,10,,,,1,,,,no,no,nifty50,2005-01-01,
-midcap100_top15_exit30,niftymidcap100,,,15,30,15,1,30,3,,,,1,,,,no,no,nifty50,2005-01-01,
-n500_top20_exit40_trendfilter,nifty500,,,20,40,20,1,30,5,,,,1,,,,yes,yes,nifty50,2005-01-01,
-marketcap_1000_5000_top20,marketcap,1000,5000,20,40,20,1,30,3,,,,1,,,,no,no,nifty50,2005-01-01,
-n500_r3_only,nifty500,,,20,40,20,1,30,5,1,,,,1,,,no,no,nifty50,2005-01-01,
-n500_all_volatility_adjusted,nifty500,,,20,40,20,1,30,5,,0.33,,,,0.33,0.34,no,no,nifty50,2005-01-01,
-n500_since2020,nifty500,,,20,40 in,20,1,30,5,,,,,,,,no,no,nifty50,2005-01-01,
+name,universe,min_marketcap_cr,max_marketcap_cr,entry,exit,n,rebalance,step,capital,cost_bps,slippage_bps,tax,min_turnover_cr,w_r3,w_r3vol,w_r6,w_r6vol,w_r12_1,w_r12_1vol,w_nearhigh,stock_sma200,rsi_period,rsi_entry_min,rsi_entry_max,macd_filter,vol_surge_entry,index_sma200,index,start,end
+n500_top20_exit40,nifty500,,,20,40,20,monthly,1,500000,30,0,no,5,,,,,,,,no,,,,no,,no,nifty50,,
+n500_top20_exit40_with_tax,nifty500,,,20,40,20,monthly,1,500000,30,0,yes,5,,,,,,,,no,,,,no,,no,nifty50,,
+n500_weekly_with_slippage,nifty500,,,20,40,20,weekly,1,500000,30,20,no,5,,,,,,,,no,,,,no,,no,nifty50,,
+n50_daily_1cr,nifty50,,,10,20,10,daily,1,10000000,30,15,no,10,,,,,,,,no,,,,no,,no,nifty50,,
+n500_top10_exit30,nifty500,,,10,30,10,monthly,1,500000,30,0,no,5,,,,,,,,no,,,,no,,no,nifty50,,
+n200_top20_exit40,nifty200,,,20,40,20,monthly,1,500000,30,0,no,5,,,,,,,,no,,,,no,,no,nifty50,,
+midcap100_top15_exit30,niftymidcap100,,,15,30,15,monthly,1,500000,30,0,no,3,,,,,,,,no,,,,no,,no,nifty50,,
+marketcap_1000_5000_top20,marketcap,1000,5000,20,40,20,monthly,1,500000,30,0,no,3,,,,,,,,no,,,,no,,no,nifty50,,
+n500_r3_only,nifty500,,,20,40,20,monthly,1,500000,30,0,no,5,1,,,,,,,no,,,,no,,no,nifty50,,
+n500_all_volatility_adjusted,nifty500,,,20,40,20,monthly,1,500000,30,0,no,5,,0.33,,,,0.33,0.34,no,,,,no,,no,nifty50,,
+n500_rsi_band,nifty500,,,20,40,20,monthly,1,500000,30,0,no,5,,,,,,,,no,14,40,80,no,,no,nifty50,,
+n500_macd_bullish,nifty500,,,20,40,20,monthly,1,500000,30,0,no,5,,,,,,,,no,,,,yes,,no,nifty50,,
+n500_volume_surge,nifty500,,,20,40,20,monthly,1,500000,30,0,no,5,,,,,,,,no,,,,no,1.2,no,nifty50,,
+n500_trendfiltered,nifty500,,,20,40,20,monthly,1,500000,30,0,no,5,,,,,,,,yes,,,,no,,yes,nifty50,,
+n500_since2020,nifty500,,,20,40,20,monthly,1,500000,30,0,no,5,,,,,,,,no,,,,no,,no,nifty50,2020-01-01,

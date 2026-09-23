@@ -17,16 +17,22 @@ from fetch_bhav import fetch_day, parse_bhav, make_session
 
 STORE = "data/history.csv"
 DEFAULT_START = "2013-01-01"
-STORE_COLS = ["date", "symbol", "close", "prev_close"]
+STORE_COLS = ["date", "symbol", "close", "prev_close", "volume"]
 
 
 def load_store():
     if not os.path.exists(STORE):
         return pd.DataFrame(columns=STORE_COLS)
-    return pd.read_csv(STORE, parse_dates=["date"])
+    df = pd.read_csv(STORE, parse_dates=["date"])
+    if "volume" not in df.columns:
+        df["volume"] = float("nan")
+    return df
 
 
 def save_store(df):
+    if "volume" not in df.columns:
+        df["volume"] = float("nan")
+    df = df[STORE_COLS]
     df = df.drop_duplicates(["date", "symbol"], keep="last").sort_values(["date", "symbol"])
     os.makedirs("data", exist_ok=True)
     df.to_csv(STORE, index=False, date_format="%Y-%m-%d")
