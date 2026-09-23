@@ -21,9 +21,13 @@ STORE_COLS = ["date", "symbol", "close", "prev_close", "volume"]
 
 
 def load_store():
-    if not os.path.exists(STORE):
+    if not os.path.exists(STORE) or os.path.getsize(STORE) == 0:
         return pd.DataFrame(columns=STORE_COLS)
-    df = pd.read_csv(STORE, parse_dates=["date"])
+    try:
+        df = pd.read_csv(STORE, parse_dates=["date"])
+    except pd.errors.EmptyDataError:
+        print(f"{STORE} exists but has no data in it; starting a fresh backfill.")
+        return pd.DataFrame(columns=STORE_COLS)
     if "volume" not in df.columns:
         df["volume"] = float("nan")
     return df
