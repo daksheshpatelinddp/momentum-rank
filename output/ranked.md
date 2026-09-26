@@ -1,4 +1,4 @@
-# Momentum ranking (data up to 2026-09-18)
+# Momentum ranking (data up to 2026-09-25)
 
 Ranked **21** of 28 symbols. Score is 0-100 (percentile-based, relative to this list only).
 
@@ -6,27 +6,27 @@ Ranked **21** of 28 symbols. Score is 0-100 (percentile-based, relative to this 
 
 | rank | symbol | score | ret_3m_% | ret_6m_% | ret_1y_% | ret_12m_ex1m_% | volatility_% | below_52w_high_% | close | flag |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | PAYTM | 94.5 | 69.8 | 78.7 | 57.1 | 38.6 | 43.4 | 0.0 | 1849.9 |  |
-| 2 | MWL | 91.0 | 13.0 | 70.6 | 67.6 | 63.3 | 34.0 | 1.2 | 42.52 |  |
-| 3 | AEGISVOPAK | 82.4 | 27.9 | 77.3 | 29.9 | 14.0 | 49.6 | 0.0 | 314.95 |  |
-| 4 | ROLEXRINGS | 78.6 | 18.4 | 49.5 | 24.8 | 32.9 | 46.3 | 7.4 | 172.08 |  |
-| 5 | PFOCUS | 77.9 | 53.4 | 11.5 | 87.1 | 61.4 | 52.7 | 1.5 | 344.35 |  |
-| 6 | KAJARIACER | 70.5 | 3.2 | 33.2 | -0.2 | 0.3 | 29.4 | 4.7 | 1202.7 |  |
-| 7 | GUJTHEM | 67.1 | 6.2 | 61.7 | 10.6 | -1.3 | 56.6 | 9.0 | 427.4 |  |
-| 8 | BRIGADE | 56.9 | 16.1 | 28.4 | -11.6 | -9.1 | 42.6 | 20.4 | 621.7 |  |
-| 9 | GOLDIAM | 56.4 | -7.2 | 51.9 | 9.3 | 20.6 | 58.3 | 14.9 | 326.75 |  |
-| 10 | ZFCVINDIA | 53.1 | -8.2 | 8.6 | 8.2 | 20.6 | 28.5 | 11.1 | 2387.0 |  |
-| 11 | GUJINJEC | 51.2 | -17.6 | 35.6 | 395.0 | 441.5 | 51.3 | 27.5 | 9.9 |  |
-| 12 | TRIVENI | 50.2 | -5.7 | 6.9 | 10.0 | 36.0 | 43.3 | 20.4 | 238.8 |  |
-| 13 | SBIN | 47.1 | -4.3 | -3.4 | 15.5 | 21.6 | 24.9 | 18.9 | 996.2 |  |
-| 14 | MINOLTAF | 38.6 | -5.5 | -8.6 | 29.0 | 16.8 | 42.4 | 19.8 | 1.38 | unverified |
-| 15 | KFINTECH | 38.1 | 2.8 | 2.6 | -19.1 | -14.8 | 36.0 | 20.8 | 930.0 |  |
-| 16 | HDFCAMC | 34.8 | -9.8 | 3.1 | -17.2 | -10.9 | 35.1 | 17.6 | 2425.0 |  |
-| 17 | VBL | 31.0 | -17.7 | 8.7 | -11.1 | -9.3 | 31.1 | 22.4 | 421.95 |  |
-| 18 | JIOFIN | 27.4 | -5.5 | -1.2 | -27.5 | -23.0 | 29.5 | 27.0 | 229.89 |  |
-| 19 | INFY | 19.0 | -1.3 | -17.8 | -31.7 | -27.2 | 34.4 | 37.8 | 1051.4 |  |
-| 20 | HDFCBANK | 19.0 | -7.0 | -4.4 | -24.4 | -24.8 | 25.1 | 27.6 | 731.0 |  |
-| 21 | TEAMLEASE | 15.2 | -15.9 | 1.7 | -35.2 | -33.8 | 23.6 | 34.8 | 1219.0 |  |
+| 1 | MWL | 92.1 | 16.1 | 69.8 | 90.1 | 76.6 | 34.7 | 3.5 | 43.07 |  |
+| 2 | PAYTM | 91.0 | 48.8 | 74.6 | 48.8 | 49.2 | 42.7 | 9.5 | 1674.0 |  |
+| 3 | ROLEXRINGS | 88.8 | 31.9 | 76.0 | 47.2 | 35.9 | 47.5 | 0.0 | 195.35 |  |
+| 4 | AEGISVOPAK | 77.6 | 23.3 | 77.9 | 18.1 | 8.2 | 50.2 | 9.7 | 287.5 |  |
+| 5 | GUJTHEM | 70.5 | 6.0 | 83.8 | 4.3 | 3.1 | 55.5 | 11.3 | 417.0 |  |
+| 6 | KAJARIACER | 70.5 | 1.8 | 32.4 | 3.0 | 1.5 | 28.7 | 3.4 | 1218.1 |  |
+| 7 | PFOCUS | 66.2 | 50.3 | -4.2 | 72.0 | 61.2 | 51.8 | 11.7 | 315.45 |  |
+| 8 | GOLDIAM | 61.2 | -6.8 | 61.3 | 17.7 | 27.8 | 58.1 | 15.4 | 325.05 |  |
+| 9 | TRIVENI | 60.2 | 0.2 | 8.2 | 21.5 | 38.5 | 39.3 | 17.5 | 247.55 |  |
+| 10 | BRIGADE | 56.4 | 13.8 | 22.5 | -11.9 | -3.3 | 42.0 | 23.4 | 597.9 |  |
+| 11 | ZFCVINDIA | 47.4 | -10.0 | 2.6 | 12.3 | 22.6 | 27.9 | 12.4 | 2354.2 |  |
+| 12 | GUJINJEC | 46.2 | -23.1 | 20.8 | 371.1 | 506.7 | 51.3 | 30.8 | 9.45 |  |
+| 13 | SBIN | 41.4 | -6.0 | 0.4 | 14.7 | 21.7 | 23.9 | 19.9 | 983.0 |  |
+| 14 | VBL | 39.0 | -14.4 | 13.2 | -2.2 | -5.8 | 30.2 | 20.1 | 434.8 |  |
+| 15 | HDFCAMC | 38.1 | -10.3 | 7.3 | -15.4 | -8.4 | 34.2 | 18.0 | 2378.0 |  |
+| 16 | KFINTECH | 35.7 | 1.7 | 1.4 | -17.0 | -10.6 | 35.6 | 24.3 | 888.8 |  |
+| 17 | JIOFIN | 30.5 | -5.2 | 1.3 | -23.3 | -19.5 | 28.8 | 27.9 | 227.0 |  |
+| 18 | MINOLTAF | 27.1 | -9.6 | -12.6 | -1.5 | -4.5 | 42.5 | 23.3 | 1.32 | unverified |
+| 19 | HDFCBANK | 22.6 | -7.6 | 0.6 | -22.2 | -24.8 | 24.0 | 27.1 | 735.6 |  |
+| 20 | INFY | 19.0 | -3.9 | -20.0 | -31.0 | -23.3 | 34.2 | 40.8 | 1000.2 |  |
+| 21 | TEAMLEASE | 18.3 | -19.1 | 3.9 | -34.5 | -30.1 | 22.0 | 34.8 | 1173.0 |  |
 
 
 ## Corporate-action sources used in this run
@@ -46,8 +46,8 @@ Ranked **21** of 28 symbols. Score is 0-100 (percentile-based, relative to this 
 - Prices for INRADIA, MINOLTAF, GUJINJEC come from BSE.
 - NSE announcements: VALIDATED - reproduced 4 of 5 known events, so it is used for every bonus, split, rights issue and demerger.
   - expected GUJINJEC 2026-07-08 factor 0.1, source showed no change
-- BSE announcements: VALIDATED - reproduced 5 of 5 known events, so it is used for every bonus, split, rights issue and demerger.
-- Announced but NOT adjusted: MINOLTAF 2026-07-17 'Right Issue of Equity Shares ' (ratio not readable from the text). Add the exact factor to corporate_actions.csv.
+- BSE announcements: not usable - ConnectionError: HTTP 403.
+- Yahoo Finance (bonus/split only): checked 0 of 3 stocks; no Yahoo data for GUJINJEC, INRADIA, MINOLTAF.
 
 
 ## Corporate-action adjustments applied
@@ -74,7 +74,7 @@ Ranked **21** of 28 symbols. Score is 0-100 (percentile-based, relative to this 
 |---|---|---|---|---|---|
 | INRADIA | 2025-08-06 | 2026-07-20 | 10 | 40.4 | stopped trading or very thin (last trade 2026-07-20) |
 | JBCHEPHARM | 2025-06-16 | 2026-07-16 | 269 | 38.8 | stopped trading or very thin (last trade 2026-07-16) |
-| GUJENERGY | 2026-07-01 | 2026-09-18 | 57 | -18.0 | listed less than a year ago |
+| GUJENERGY | 2026-07-01 | 2026-09-25 | 62 | -20.9 | listed less than a year ago |
 
 
 *Research shortlist only, not investment advice. Returns look back 90 / 180 / 365 calendar days from today, like Screener, so small differences remain if another site used a different day. ret_12m_ex1m skips the latest month.*
